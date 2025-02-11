@@ -1,1 +1,494 @@
+---
+title: "Mass spectra R Suppl III"
+author: "luboprol"
+format: docx
+editor: visual
+---
+
+## Example 1. AsAu clusters
+
+(Prokeš et al. 2014)
+
+Reading mass spectrum
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(openxlsx)
+RMG <- read.xlsx("c:\\Users\\Admin\\Dropbox\\AuAs h2000 neg 120.xlsx",sheet = "AuAs h2000 neg 120m", startRow = 1, colNames = FALSE, rowNames = FALSE,detectDates = FALSE, skipEmptyRows = TRUE, rows = NULL, cols = NULL,check.names = FALSE)
+head(RMG)
+
+plot(RMG[,1],RMG[,2],type="l",col="black", xlab="m/z", ylab="intensity (mV)")
+
+```
+
+### **Peaks identification and selection**
+
+Find peaks and filtering according to SNR (library *MALDIquant*), and according to intensity treshold (library *MALDIrppa*)
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(MALDIquant)
+library(MALDIrppa)
+
+
+# Find peaks and filtering according to SNR
+
+spectr1 <- MALDIquant::createMassSpectrum(RMG[,1],RMG[,2])
+peak1 <- MALDIquant::detectPeaks(spectr1,halfWindowSize=20, method="SuperSmoother",SNR=30) # SNR and halfWindowSize (for SuperSmoother method) can be modified by a user
+# method=c("MAD", "SuperSmoother")
+length(peak1@mass) # number of peaks
+sgm1 = cbind(peak1@mass,peak1@intensity)
+
+plot(RMG[,1],RMG[,2],type="l", xlab="m/z", ylab="Intensity")
+points(sgm1[,1],sgm1[,2],pch=4,col=2)
+legend("topright","identified peaks",col=2,pch=4,cex=0.7)
+
+mz1 = 2500
+mz2 = 3000
+plot(RMG[,1],RMG[,2],xlim=c(mz1,mz2),ylim=c(0,1300),type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(peak1, mass=mz1:mz2, underline=FALSE,avoidOverlap=TRUE, digits=2,col=2)
+
+np = 30
+plot(RMG[,1],RMG[,2],type="l",xlab="m/z",ylab="Intensity")
+topp <- sort(intensity(peak1), decreasing=TRUE, index.return=TRUE)$ix[1:np]
+MALDIquant::labelPeaks(peak1, index=topp, avoidOverlap=TRUE, digits=2)
+
+
+# Find peaks and filtering using treshold
+
+peak2a <- MALDIrppa::rawToPeaks(RMG[,1],as.matrix(RMG[,2]))
+MALDIrppa::countPeaks(peak2a) # number of peaks
+sgm2a = cbind(peak2a[[1]]@mass,peak2a[[1]]@intensity)
+
+treshInt = 100 # it can be modified by a user
+peak2 <- MALDIrppa::deletePeaks(peak2a, min = treshInt)
+sgm2 = cbind(peak2[[1]]@mass,peak2[[1]]@intensity)
+
+plot(RMG[,1],RMG[,2],type="h", xlab="m/z", ylab="Intensity")
+abline(h=treshInt,col=2,lty=2)
+
+plot(RMG[,1],RMG[,2],type="l", xlab="m/z", ylab="Intensity")
+points(sgm2[,1],sgm2[,2],pch=4,col=2)
+legend("topright","identified peaks",col=2,pch=4,cex=0.7)
+
+
+# treshold according to Zhurov et al. 2014 (using KDE)
+plot(density(log(sgm2a[,2]),bw="nrd0"),main="")
+# bw = "nrd0" (Silverman), "nrd" (Scott), "SJ" (Sheather, Jones), "ucv" (unbiased CV), "bcv" (biased CV)
+rug(log(sgm2a[,2]))
+tg = 4  # should be modified according to the plot
+abline(v=tg,col=2,lty=2)
+(treshInt = exp(tg))
+
+mz1 = 2500
+mz2 = 3000
+plot(RMG[,1],RMG[,2],xlim=c(mz1,mz2),ylim=c(0,1300),type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(peak2[[1]], mass=mz1:mz2, underline=FALSE,avoidOverlap=TRUE, digits=2,col=2)
+# pro MALDIrppa chybi popisky nejintenzivnejsich piku
+
+np = 30
+plot(RMG[,1],RMG[,2],type="l",xlab="m/z",ylab="Intensity",ylim=c(0,1300))
+topp <- sort(intensity(peak2[[1]]), decreasing=TRUE, index.return=TRUE)$ix[1:np]
+MALDIquant::labelPeaks(peak2[[1]], index=topp, avoidOverlap=TRUE, digits=2)
+
+
+```
+
+### Model
+
+Generation set of binary molecular formulas El1(1-nmax1)El2(1-nmax2) of binary molecular clusters and list of clusters and their number in particular m/z interval for the generated clusters.
+
+Random chosing of formulas and intensities for model mass spectra.
+
+Model spectrum using *enviPat* library.
+
+```{r}
+
+library(CHNOSZ)
+library(enviPat)
+library(clusterSim)
+library(RColorBrewer)
+
+
+### Generation of formulas
+
+gformulas = function(El1, nmax1, El2, nmax2){
+  x1 = paste0(rep(El1,(nmax1+1)),c(0:nmax1))
+  x1[2] = El1
+  x2 = paste0(rep(El2,(nmax2+1)),c(0:nmax2))
+  x2[2] = El2
+  d = expand.grid(x = x1, y = x2)
+  frm = paste0(d[,1],d[,2])[-1]
+  frm = gsub(paste0(El1,0),"", frm)
+  frm = gsub(paste0(El2,0),"", frm)
+  return(frm)
+}
+formulas = gformulas(El1 = "As", nmax1 = 18, El2 = "Au", nmax2 = 30)
+
+
+### Clusters in particular range of average masses (from formulas)
+massclust = function(forms,mmin,mmax){
+   AMs = CHNOSZ::mass(forms)
+   nm = which(AMs >= mmin & AMs <= mmax)
+   return(forms[nm])
+}
+rforms = massclust(forms=formulas, mmin = 2000, mmax = 4000)
+length(rforms)
+
+
+### Random sample of Ns spectra from the range
+Ns = 12
+chemforms = sample(rforms, size=Ns, replace = FALSE, prob = NULL)
+C = sample(c(10:100), size=Ns, replace = TRUE, prob = NULL)
+names(C) = chemforms
+
+
+### Model spectrum
+
+range(RMG[,1])
+mmin = 2000
+mmax = 4000
+resol = 6000
+
+data(isotopes)
+pattern = enviPat::isopattern(isotopes, chemforms, threshold = 0.001, charge = FALSE, emass = 0.00054858, plotit = FALSE, algo=1, rel_to = 0,verbose = TRUE, return_iso_calc_amount = FALSE)
+
+profiles = enviPat::envelope(pattern, ppm = FALSE, dmz = "get", frac = 1/4, env = "Gaussian",resolution = resol, plotit = FALSE, verbose = TRUE)
+
+normfun = function(xx){ 
+  yy = clusterSim::data.Normalization (xx[,2],type="n4",normalization="row")
+  return(cbind(xx[,1],yy))
+} 
+nprofiles = lapply(profiles,normfun)
+#summary(nprofiles)
+#head(nprofiles[[1]])
+
+# superposition of the spectra
+cols = colorRampPalette(brewer.pal(Ns, "Dark2"))(length(nprofiles))
+names(cols) = chemforms
+
+plot(NULL, xlim=c(mmin,mmax), ylim=c(0,100), xlab="m/z",ylab="Norm. intensity (%)",main=paste("Resolution:",resol,sep = " "),cex.main=.8)
+
+nplot = function(xy){
+  xx1 = nprofiles[[xy]]
+  xx1[,2] = C[xy]*as.numeric(xx1[,2])
+  points(xx1[,1],xx1[,2],type="l",col=cols[xy])
+  abline(h=0,lty=2)
+  }
+lapply(chemforms,nplot)
+legend("topleft",chemforms,lty=1,col=cols,cex=.5)
+
+
+```
+
+**Kendrick mass, Kendrick mass defect, and remainers of Kendrick mass**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(CHNOSZ)
+library(InterpretMSSpectrum)
+
+
+## Average mass
+AM = CHNOSZ::mass("Au")
+# am = CHNOSZ::mass("As")
+
+## Exact mass
+EM = InterpretMSSpectrum::get_exactmass("Au")
+# EM = InterpretMSSpectrum::get_exactmass("As")
+
+## Monoisotopic mass
+library(enviPat)
+data(isotopes)
+Monoisotopic_mass_elem = function(ii){
+  elem = isotopes[which(isotopes$element==ii),]
+  M = elem[which.max(elem$abundance),3]
+  return(M) 
+}
+MM = Monoisotopic_mass_elem("Au")
+# MM = Monoisotopic_mass_elem("As")
+
+## Nominal mass
+NM = round(EM,0)
+
+
+
+sgm = sgm2
+
+## Kendrick mass
+library(MetaboCoreUtils)
+KM = calculateKm(sgm[,1], fragment = NM/EM)
+KMD = calculateKmd(sgm[,1], fragment = NM/EM)
+
+plot(KM,KMD,xlab="KM",ylab="KMD")
+# sgm[,1]
+
+plot(sgm[,1],KMD,xlab="m/z",ylab="KMD")
+
+
+## Nominal Kendrick mass
+NKM = sapply(KM,function(xx){round(xx,0)})
+
+plot(NKM,KMD,xlab="NKM",ylab="KMD")
+
+
+## Remainder of Kendrick mass
+RKM = KM/NM - floor(KM/NM)
+plot(sgm[,1],RKM,xlab="m/z",ylab="RKM")
+
+
+kmm = cbind(sgm[,1],KM,KMD, RKM) 
+colnames(kmm) = c("m/z","KM","KMD","RKM")
+kmm
+
+```
+
+**Simulation Kendrick mass, Kendrick mass defect, and remainers of Kendrick mass**
+
+```{r}
+
+## Exact mass
+EM1 = InterpretMSSpectrum::get_exactmass("Au")
+EM2 = InterpretMSSpectrum::get_exactmass("As")
+EM3 = EM1+EM2
+
+Au = c(1:50)*EM1
+As = c(1:50)*EM2
+AsAu = c(1:50)*EM3
+
+KM = calculateKm(sgm[,1], fragment = NM/EM)
+KMD = calculateKmd(sgm[,1], fragment = NM/EM)
+
+KM1 = calculateKm(Au, fragment = NM/EM)
+KMD1 = calculateKmd(Au, fragment = NM/EM)
+KM2 = calculateKm(As, fragment = NM/EM)
+KMD2 = calculateKmd(As, fragment = NM/EM)
+KM3 = calculateKm(AsAu, fragment = NM/EM)
+KMD3 = calculateKmd(AsAu, fragment = NM/EM)
+
+plot(KM,KMD,xlab="KM",ylab="KMD")
+points(KM1,KMD1,col=2,pch=16)
+points(KM2,KMD2,col=3,pch=16)
+points(KM3,KMD3,col=4,pch=16)
+# sgm[,1]
+
+plot(sgm[,1],KMD,xlab="m/z",ylab="KMD")
+points(Au,KMD1,col=2,pch=16)
+points(As,KMD2,col=3,pch=16)
+points(AsAu,KMD3,col=4,pch=16)
+
+## Nominal Kendrick mass
+NKM1 = sapply(KM1,function(xx){round(xx,0)})
+NKM2 = sapply(KM2,function(xx){round(xx,0)})
+NKM3 = sapply(KM3,function(xx){round(xx,0)})
+
+plot(NKM,KMD,xlab="NKM",ylab="KMD")
+points(NKM1,KMD1,col=2,pch=16)
+points(NKM2,KMD2,col=3,pch=16)
+points(NKM3,KMD3,col=4,pch=16)
+
+
+## Remainder of Kendrick mass
+
+KM1 = calculateKm(Au, fragment = NM/EM)
+KMD1 = calculateKmd(Au, fragment = NM/EM)
+KM2 = calculateKm(As, fragment = NM/EM)
+KMD2 = calculateKmd(As, fragment = NM/EM)
+KM3 = calculateKm(AsAu, fragment = NM/EM)
+KMD3 = calculateKmd(AsAu, fragment = NM/EM)
+
+plot(KM,KMD,xlab="KM",ylab="KMD")
+points(KM1,KMD1,col=2,pch=16)
+points(KM2,KMD2,col=3,pch=16)
+points(KM3,KMD3,col=4,pch=16)
+
+
+RKM1 = KM1/round(EM1,0) - floor(KM1/round(EM1,0))
+RKM2 = KM2/round(EM2,0) - floor(KM2/round(EM2,0))
+RKM3 = KM3/round(EM3,0) - floor(KM3/round(EM3,0))
+
+plot(sgm[,1],RKM,xlab="m/z",ylab="RKM")
+points(Au,RKM1,col=2,pch=16)
+points(As,RKM2,col=3,pch=16)
+points(AsAu,RKM3,col=4,pch=16)
+
+```
+
+Identification (formula finding) of mass peaks using *rcdk* library,
+
+alculation of average mass (library *CHNOSZ*), exact mass (library *InterpretMSSpectrum*), and monoisotopic mass
+
+Modeling mass spectra (library *enviPat*)
+
+2D mapping according to Artemenko et al. (2009)
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(CHNOSZ)
+library(rcdk)
+
+# Max number of atoms
+element_Au = 80
+element_As = 80
+element_O = 10
+element_H = 5
+
+GenForm = function(XX){rcdk::generate.formula(XX, window=0.8, validation=FALSE, charge=-1, elements=list(c("Au",0,element_Au),c("As",0,element_As)))
+# elements=list(c("Au",0,element_Au),c("As",0,element_As), c("O",0,element_O),c("H",0,element_H))
+}
+# "charge" and "window" in GenForm function can be modified by a user
+listforM = sapply(sgm[,1], GenForm)
+
+empty_indices <- which(sapply(listforM, function(x) length(x) == 0))
+non_empty_indices <- which(sapply(listforM, function(x) length(x) != 0))
+
+ext_string = function(xx){
+    extracted_string <- gsub(".*\\[(.*)\\].*", "\\1", xx)
+    final_string <- gsub("\\+", "", extracted_string)
+    final_string <- gsub("\\-", "", final_string)
+    print(final_string)
+}
+FORMX = sapply(listforM,ext_string)
+FORMM = unique(unlist(FORMX))
+
+
+chars = lapply(FORMM,function(x){names(CHNOSZ::count.elements(x))})
+nums = lapply(FORMM,function(x){as.vector(CHNOSZ::count.elements(x))})
+ulch = sort(unique(unlist(chars)))
+Mrl = as.data.frame(matrix(0,length(chars),length(ulch)))
+colnames(Mrl)=ulch
+for(X in c(1:length(chars))){  
+   for(i in c(1:length(chars[[X]]))){ 
+    cn1 = which(ulch == chars[[X]][i])
+    cn2 = which(chars[[X]] == chars[[X]][i])
+    Mrl[X,cn1] = as.numeric(nums[[X]][cn2])
+   }
+}
+rownames(Mrl) = FORMM
+
+plot(Mrl[,1], Mrl[,2], xlab=colnames(Mrl)[1], ylab=colnames(Mrl)[2])
+
+
+## Average mass
+AM = CHNOSZ::mass(FORMM)
+
+## Exact mass
+EM = InterpretMSSpectrum::get_exactmass(FORMM)
+
+## Monoisotopic mass
+
+parse_formula <- function(formula) {
+  pattern <- "([A-Z][a-z]*)([0-9]*)"
+  matches <- regmatches(formula, gregexpr(pattern, formula))[[1]]
+  elements <- sapply(matches, function(x) sub(pattern, "\\1", x))
+  counts <- sapply(matches, function(x) {
+    count <- sub(pattern, "\\2", x)
+    ifelse(count == "", 1, as.numeric(count))
+  })
+  names(counts) <- elements
+  return(counts)
+}
+
+library(enviPat)
+data(isotopes)
+Monoisotopic_mass_elem = function(ii){
+  elem = isotopes[which(isotopes$element==ii),]
+  M = elem[which.max(elem$abundance),3]
+  return(M) 
+}
+monoisotopic_masses = lapply(unique(isotopes$element),Monoisotopic_mass_elem)
+# sapply(unique(isotopes$element),Monoisotopic_mass_elem)
+names(monoisotopic_masses) = unique(isotopes$element)
+monoisotopic_masses
+
+calculate_monoisotopic_mass <- function(formula) {
+  counts <- parse_formula(formula)
+  mass <- sum(sapply(c(1:length(counts)), function(ii){unlist(monoisotopic_masses[names(counts)])[ii] %*% counts[ii]}))
+  return(mass)
+}
+MM <-sapply(FORMM, calculate_monoisotopic_mass)
+MM
+
+## Nominal mass
+#MN = round(EM,0)
+MN = trunc(0.5 + MM*(1999.0/2000.0))
+
+## Normalized monoisotopic mass defect (NMD)
+NMD = 1000*(MM-MN)/MM
+
+## Normalized isotopic shift (NIS)
+NIS = 1000*(AM-MM)/MM
+
+
+plot(NMD, NIS, xlab="NMD", ylab="NIS")
+
+
+kmg = cbind(AM, EM, MM,NMD, NIS) 
+colnames(kmg) = c("AM","EM","MM","NMD","NIS")
+rownames(kmg) = FORMM
+kmg
+
+```
+
+Simulation 2D mapping
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+fAu = sapply(c(1:50), function(xx) paste0("Au",xx))
+fAs = sapply(c(1:50), function(xx) paste0("As",xx))
+fAsAu = sapply(c(1:50), function(xx) paste0("As",xx,"Au",xx))
+
+
+## Average mass
+AM1 = sapply(fAu, CHNOSZ::mass)
+AM2 = sapply(fAs, CHNOSZ::mass)
+AM3 = sapply(fAsAu, CHNOSZ::mass)
+
+
+## Exact mass
+EM1 = InterpretMSSpectrum::get_exactmass(fAu)
+EM3 = InterpretMSSpectrum::get_exactmass(fAs)
+EM3 = InterpretMSSpectrum::get_exactmass(fAsAu)
+
+## Monoisotopic mass
+calculate_monoisotopic_mass <- function(formula) {
+  counts <- parse_formula(formula)
+  mass <- sum(sapply(c(1:length(counts)), function(ii){unlist(monoisotopic_masses[names(counts)])[ii] %*% counts[ii]}))
+  return(mass)
+}
+MM1 <-sapply(fAu, calculate_monoisotopic_mass)
+MM2 <-sapply(fAs, calculate_monoisotopic_mass)
+MM3 <-sapply(fAsAu, calculate_monoisotopic_mass)
+
+## Nominal mass
+#MN = round(EM,0)
+MN1 = trunc(0.5 + MM1*(1999.0/2000.0))
+MN2 = trunc(0.5 + MM2*(1999.0/2000.0))
+MN3 = trunc(0.5 + MM3*(1999.0/2000.0))
+
+## Normalized monoisotopic mass defect (NMD)
+NMD1 = 1000*(MM1-MN1)/MM1
+NMD2 = 1000*(MM2-MN2)/MM2
+NMD3 = 1000*(MM3-MN3)/MM3
+
+## Normalized isotopic shift (NIS)
+NIS1 = 1000*(AM1-MM1)/MM1
+NIS2 = 1000*(AM2-MM2)/MM2
+NIS3 = 1000*(AM3-MM3)/MM3
+
+
+plot(NMD, NIS, xlab="NMD", ylab="NIS")
+points(NMD1,NIS1,col=2,pch=16)
+points(NMD2,NIS2,col=3,pch=16)
+points(NMD3,NIS3,col=4,pch=16)
+
+```
+
+### **References**
+
+Artemenko, K. A., Zubarev, A. R., Samgina, T. Yu., Lebedev, A. T., Savitski, M. M., Zubarev, R. A. 2009. Two dimensional mass mapping as a general method of data representation in comprehensive analysis of complex molecular mixtures. *Analytical Chemistry*, 81 (10), 3738-3745. DOI: 10.1021/ac802532j
+
+Prokeš, L., Peña Méndez, E. M., Conde, J. E., Reddy Panyala, N., Alberti, M., Havel, J. 2014. Laser ablation synthesis of new gold arsenides using nano-gold and arsenic as precursors. Laser desorption ionisation time-of-flight mass spectrometry and spectrophotometry. *Rapid Communications in Mass Spectrometry*, 28 (6), 577-86. DOI: 10.1002/rcm.6815
+
+Zhurov, K. O., Kozhinov, A. N., Fornelli, L., Tsybin, Y. O. 2014. Distinguishing analyte from noise components in mass spectra of complex samples: Where to cut the noise? *Analytical Chemistry*, 86, 3308-3316. DOI: 10.1021/ac403278t
 
