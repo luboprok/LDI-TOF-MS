@@ -1,1 +1,868 @@
+---
+title: "Using R for interpretation of LDI TOF mass spectra"
+author: "Lubomír Prokeš, Lukáš Pečinka"
+format: html
+editor: visual
+---
+
+## Example: GaSe clusters
+
+(Pečinka et al. 2019)
+
+Reading mass spectrum
+
+```{r, echo=FALSE, warning=FALSE}
+
+library(openxlsx)
+RMSq <- read.xlsx("c:\\Users\\Admin\\Dropbox\\low 300  pos 130 Ga-Se1-1.xlsx",sheet = "low 300  pos 130 Ga-Se1-1", startRow = 1, colNames = FALSE, rowNames = FALSE,detectDates = FALSE, skipEmptyRows = TRUE, rows = NULL, cols = NULL,check.names = FALSE)
+head(RMSq)
+
+
+plot(RMSq[,1],RMSq[,2],type="l",col="black", xlab="m/z", ylab="intensity (mV)")
+
+```
+
+## Selection of clusters and determination of stoichiometry
+
+#### Selection of mass range
+
+In this step, the region of the mass spectrum to be identified is selected. The model region is chosen based on the overlapping isotope envelopes of several ions, originating from mixed signals.
+
+```{r, echo=FALSE, warning=FALSE}
+
+# for ranges see also Ranges from Suppl I 
+
+xmin = 430
+xmax = 500
+ymin = 0
+ymax = 60
+
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="intensity (mV)")
+rect(xmin, ymin, xmax, ymax,border="blue", lty=NULL, lwd=par("lwd"), xpd=FALSE)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="intensity (mV)",xlim=c(xmin,xmax), ylim=c(0,ymax))
+
+```
+
+#### Mass spectra normalization
+
+Signals in a given region are converted from units (mV) to a normalized percentage value, where 100% is assigned to the signal with the highest intensity in a given cumulative isotopic envelope. \### unitization with zero minimum using library *clusterSim*.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(clusterSim)
+library(MALDIquant)
+
+###
+xn = RMSq[,1]
+n1 = which(abs(xn-xmin)==min(abs(xn-xmin)));n1
+n2 = which(abs(xn-xmax)==min(abs(xn-xmax)));n2
+yn = RMSq[,2]
+Xn = xn[n1:n2]
+#Yn = 100*(yn[n1:n2]-min(yn[n1:n2]))/(max(yn[n1:n2])-min(yn[n1:n2]))
+Yn = 100*clusterSim::data.Normalization (yn[n1:n2],type="n4",normalization="row")
+
+
+### 
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+trs <- MALDIquant::trim(spectrum,c(xmin,xmax))
+Xn = trs@mass
+yN = trs@intensity
+Yn = 100*clusterSim::data.Normalization (yN,type="n4",normalization="row")
+
+
+
+plot(Xn,Yn,type="l",xlab="m/z",ylab="intensity [%]",xlim=c(xmin,xmax), ylim=c(0,100))
+
+```
+
+#### Clusters from mass
+
+Clusters stoichiometry was calculated using *rcdk* library. The value of the monoisotopic peak of the given signal is estimated, along with the number of atoms of each element, the charge of the resulting ion, and the tolerance by which the theoretical value of the monoisotopic signal may differ from the set value. Optimal number of models for spectra fitting is cca 6.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+Mass = 0.96*xmax # it can be modified by a user
+
+Window = ceiling((xmax-xmin)/1.75) # it can be modified by a user
+
+# Max number of atoms, it can be modified by a user
+element_Se = 50
+element_Ga = 50
+element_O = 10
+element_H = 5
+
+library(rcdk)
+listform = rcdk::generate.formula(Mass, window=Window, validation=FALSE, charge=1,   # it can be modified by a user
+          elements=list(c("Se",0,element_Se),c("Ga",0,element_Ga)))
+# elements=list(c("Se",0,element_Se),c("Ga",0,element_Ga), c("O",0,element_O),c("H",0,element_H)))
+
+
+tablist = function(xx){
+  dfm = c(listform[[xx]]@string,
+  round(as.numeric(listform[[xx]]@mass),3))
+  names(dfm)=NULL
+  return(dfm)
+}
+tabb = sapply(c(1:length(listform)),tablist)
+tabb = t(tabb)
+tabb2 = as.data.frame(tabb)
+tabb2[,1] = as.character(tabb2[,1])
+tabb2[,2] = as.numeric(as.character(tabb2[,2]))
+tabb2[,3] = tabb2[,2]-Mass
+colnames(tabb2) = c("Formula","Molecular mass","Difference")
+rownames(tabb2) = c(1:nrow(tabb2))
+
+# selection of clusters can be used by a user if necessary
+#tabb2 = tabb2[c(2:5),]
+
+tabb2
+
+```
+
+## Modeling of theoretical mass spectra
+
+For modeling of isotopic patterns R library *enviPat* was used. The theoretical model in a given domain is constructed according to the chosen resolution. The percentage contributions of each signal are estimated on the basis of the theoretical isotopic envelopes of each ion.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+chemforms = as.vector(tabb2[,1])
+Np = nrow(tabb2)
+
+resol = 6000 # it can be modified by a user
+
+library(enviPat)
+library(clusterSim)
+
+data(isotopes)
+pattern = enviPat::isopattern(isotopes, chemforms, threshold = 0.001, charge = FALSE, emass = 0.00054858, plotit = FALSE, algo=1, rel_to = 0,verbose = TRUE, return_iso_calc_amount = FALSE)
+
+profiles = enviPat::envelope(pattern, ppm = FALSE, dmz = "get", frac = 1/4, env = "Gaussian",resolution = resol, plotit = FALSE, verbose = TRUE)
+
+normfun = function(xx){ 
+  yy = 100*data.Normalization (xx[,2],type="n4",normalization="row")
+  return(cbind(xx[,1],yy))
+} 
+nprofiles = lapply(profiles,normfun)
+
+```
+
+**Theoretical isotopic patterns**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+chemforms = as.vector(tabb2[,1])
+Np = nrow(tabb2)
+
+resol = resol
+
+library(enviPat)
+library(clusterSim)
+library(RColorBrewer)
+
+data(isotopes)
+pattern = enviPat::isopattern(isotopes, chemforms, threshold = 0.001, charge = FALSE, emass = 0.00054858, plotit = FALSE, algo=1, rel_to = 0,verbose = TRUE, return_iso_calc_amount = FALSE)
+
+profiles = enviPat::envelope(pattern, ppm = FALSE, dmz = "get", frac = 1/4, env = "Gaussian",resolution = resol, plotit = FALSE, verbose = TRUE)
+
+normfun = function(xx){ 
+  yy = 100*data.Normalization (xx[,2],type="n4",normalization="row")
+  return(cbind(xx[,1],yy))
+} 
+nprofiles = lapply(profiles,normfun)
+summary(nprofiles)
+
+
+cols = colorRampPalette(brewer.pal(8, "Dark2"))(length(nprofiles))
+# https://www.datanovia.com/en/blog/top-r-color-palettes-to-know-for-great-data-visualization/
+#cols = c(2,3,4,6,"orange",7,5,"steelblue", "gold", "firebrick", "forestgreen") 
+# more colors can be added according to  https://r-charts.com/colors/ or https://stackoverflow.com/questions/9563711/r-color-palettes-for-many-data-classes
+names(cols) = chemforms
+
+plpr = function(ii){
+  plot(nprofiles[[ii]][,1],nprofiles[[ii]][,2], type="l", xlim=c(xmin,xmax), ylim=c(0,100), col=cols[ii], xlab="m/z",ylab="Norm. intensity (%)",main=paste("Resolution:",resol,sep = " "),cex.main=.8)
+legend("topleft",chemforms[ii],lty=1,col=cols[ii],cex=.8)
+}
+par(mar=c(1,1,1,1), mfrow=c(Np+1,1))
+plot(Xn,Yn,type="l",xlab="m/z",ylab="intensity (%)",xlim=c(xmin,xmax), ylim=c(0,100)) # measured spectrum
+lapply(c(1:Np), plpr)
+par(mfrow=c(1,1))
+
+C = c(rep(1,Np)) # it can be modified by a user
+# C = c(1,1,1,1,1) 
+names(C) = chemforms
+
+```
+
+### Patterns superposition
+
+The individual isotopic distributions of the theoretical signals are fitted to the measured data in estimated percentage contributions by superposition.
+
+```{r, echo=FALSE, warning=FALSE}
+
+plot(NULL, xlim=c(xmin,xmax), ylim=c(0,100), xlab="m/z",ylab="Norm. intensity (%)",main=paste("Resolution:",resol,sep = " "),cex.main=.8)
+
+nplot = function(xy){
+  xx1 = nprofiles[[xy]]
+  xx1[,2] = C[xy]*as.numeric(xx1[,2])
+  points(xx1[,1],xx1[,2],type="l",col=cols[xy])
+  abline(h=0,lty=2)
+  }
+lapply(chemforms,nplot)
+legend("topleft",chemforms,lty=1,col=cols,cex=.8)
+legend("topright",as.character(C),lty=1,col=cols,cex=.8)
+
+## Modification of the weights by a user if necessary
+C = c(1,1,0.4,0.2)
+names(C) = chemforms
+
+```
+
+### Cumulative of theoretical pattern
+
+The cumulative theoretical distribution, inclusive of the percentage contributions of each signal, is calculated and normalised to 100% for the most represented signal.
+
+```{r, echo=FALSE, warning=FALSE}
+
+C
+resol
+
+resampMSs <- function(xx){ # xx = "[O2Sb4]+" 
+  rsmp <<- approx(x=nprofiles[[xx]][,1],y=nprofiles[[xx]][,2], xout=Xn, method="linear",rule = 2)
+  #rsmp <<- spline(x=nprofiles[[xx]][,1],y=nprofiles[[xx]][,2],n=10000,xout=newmz,method="fmm",ties=mean)
+  # method = c("fmm", "periodic", "natural", "monoH.FC", "hyman")
+  return(C[xx]*rsmp$y)
+}
+resydata <- sapply(names(C),function(X){resampMSs(X)})
+head(resydata)
+# Xn = rsmp$x
+resdata1 = apply(resydata,1,sum)
+resydata2 = sapply(names(C),function(x) resydata[,x]/resdata1)
+
+resdata = 100*data.Normalization(resdata1,type="n4",normalization="column")
+
+resdata2 = sapply(names(C),function(xx) resdata*resydata2[,xx])
+
+plot(Xn,resdata,type="l",xlab="m/z",ylab = "Relative intensity (%)",ylim=c(0,100))
+
+```
+
+## Comparison of experimental and theoretical distribution
+
+A comparison of the distribution of the measured data with the theoretical cumulative model indicates a satisfactory fit.
+
+```{r, echo=FALSE, warning=FALSE}
+
+
+plot(Xn, Yn,type="l", xlim=c(xmin,xmax), ylim=c(0,100), xlab="m/z",ylab = "Relative intensity (%)")
+points(Xn, resdata,type="l",col=2,lty=3)
+legend("topleft",c("measured","model"),lty=c(1,3),col=c(1,2),cex=0.7)
+
+# detail
+x1 = 470 # it should be modified by a user
+x2 = 654 # it should be modified by a user
+plot(Xn, Yn,type="l", xlim=c(x1,x2), ylim=c(0,100), xlab="m/z",ylab = "Relative intensity (%)")
+points(Xn, resdata,type="l",col=2,lty=3)
+legend("topleft",c("measured","model"),lty=c(1,3),col=c(1,2),cex=0.7)
+
+
+par(mar = c(2, 2, 1, 1))
+par(mfrow=c(2,1))
+
+## measured
+plot(Xn,Yn,type="l", xlim=c(xmin,xmax), ylim=c(0,100),xlab="m/z",ylab = "Relative intensity (%)",main="measured",cex.main=0.7,cex.axis=0.7)
+
+## model
+lab = sapply(c(1:length(chemforms)),function(xx) paste(c(chemforms[xx],C[xx]),collapse="   "))
+plot(Xn,resdata,type="l",xlab="m/z",ylab = "Relative intensity (%)",main="model",cex.main=0.7,cex.axis=0.7) #,xlim=c(460,480))
+legend("topright",paste("resolution: ",resol,sep=""),cex=0.7, bty = "n")
+print(C)
+par(mfrow=c(1,1))
+
+
+RMSq_2 <- RMSq
+
+```
+
+## Mass spectra alignment
+
+The experimental and theoretical data are converted into mass spectra, then analysed to identify the signals. The experimental data are recalibrated based on the m/z positions of the signals in the theoretical spectra using warping function in the library *MALDIquant* (Gibb, Strimmer 2012).
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(MALDIquant)
+
+spectra <- createMassSpectrum(Xn,Yn)
+spectra <- c(spectra, spectra)
+r <- createMassSpectrum(Xn,resdata)
+r <- detectPeaks(r, method="MAD", halfWindowSize=5, SNR=20)
+p <- detectPeaks(spectra[1], method="MAD", halfWindowSize=5, SNR=50) # SNR MENSI 
+  
+## warping
+w <- determineWarpingFunctions(p, r, tolerance=0.1, plot=TRUE, plotInteractive=TRUE)
+  
+## warp spectra
+warpedSpectra <- warpMassSpectra(spectra, w)
+  
+## warp peaks
+warpedPeaks <- warpMassPeaks(p, w)
+  
+## helper function to avoid double coding
+plotSpectra <- function(unwarped, warped, range){
+   plot(unwarped[[1]], main=paste0("Unwarped spectra (mass ", paste0(range, collapse=":"), " Da)"), xlim=range, ylim=c(0, 100), type="n", cex.main=0.8)
+   color <- rainbow(length(unwarped))
+   for (i in seq(along=unwarped)) {
+      lines(unwarped[[i]], col=color[i])
+  }
+  plot(unwarped[[1]], main=paste0("Warped spectra (mass ", paste0(range, collapse=":"), " Da)"), xlim=range, ylim=c(0, 100), type="n", cex.main=0.8)
+  for (i in seq(along=warped)) {
+    lines(warped[[i]], col=color[i])
+  }
+}
+
+par(mfrow=c(2, 1))
+plotSpectra(spectra[1], warpedSpectra, c(xmin, xmax))
+par(mfrow=c(1, 1))
+  
+RMSq_2 <- warpedSpectra
+ 
+```
+
+## Fit isotopic pattern
+
+Fitting of linear combination of individual cluster spectra to measured spectrum using nonlinear regression via Port algorithm (function *nls* in basic *stats* library) and subsequent calculation of mixed isotopic pattern.
+
+```{r, echo=FALSE, warning=FALSE}
+
+C
+resol
+
+N = length(chemforms)
+
+#Yn = RMSq_2[[1]]@intensity
+#Yn = RMSq$X2
+
+gg = lapply(c(1:N),function(ii) paste("A",ii,"*resydata[,",ii,"]",sep=""))
+eg = as.formula(paste("Yn ~ ", paste(gg, sep = "", collapse = "+")))
+eval(eg)
+nams = sapply(c(1:N),function(i) paste("A",i,sep = ""))
+L2 = as.list(C)
+names(L2) = nams
+LL2=c(rep(0,Np))
+LU2=c(rep(Inf,Np))
+fit <- nls(eg,start=L2,data=as.data.frame(cbind(resydata,Yn)),lower=LL2,upper=LU2, algorithm="port")
+fit
+coef(fit) # coefficients
+sum(resid(fit)^2) # residal sum of squares
+
+ya = resydata %*% coef(fit)
+
+length(ya)
+length(Xn)
+
+plot(Xn,Yn,type="l",xlab="m/z",ylab = "Relative intensity (%)", xlim=c(xmin,xmax))
+points(Xn,ya,type="l",col=2,lty=3)
+legend("topleft",c("measured","calculated"),lty=c(1,3),col=c(1,2),cex=0.7)
+
+# detail
+x1 = 465 # it should be modified by a user
+x2 = 470 # it should be modified by a user
+plot(Xn, Yn,type="l", xlim=c(x1,x2), ylim=c(0,100), xlab="m/z",ylab = "Relative intensity (%)")
+points(Xn, ya,type="l",col=2,lty=3)
+legend("topleft",c("measured","model"),lty=c(1,3),col=c(1,2),cex=0.7)
+
+
+labe = sapply(c(1:length(chemforms)),function(xx) paste(c(chemforms[xx],round(coef(fit)[xx],1)),collapse="   "))
+
+par(mar = c(2, 2, 1, 1))
+par(mfrow=c(2,1))
+
+## measured
+plot(Xn,Yn,type="l",xlab="m/z",ylab = "Relative intensity (%)",main="measured",cex.main=0.7,cex.axis=0.7,ylim=c(0,100))
+
+## model
+lab = sapply(c(1:length(chemforms)),function(xx) paste(c(chemforms[xx],C[xx]),collapse="   "))
+plot(Xn,ya,type="l",xlab="m/z",ylab = "Relative intensity (%)",main="model",cex.main=0.7,cex.axis=0.7,ylim=c(0,100))
+legend("topright",paste("resolution: ",resol,sep=""),cex=0.7, bty = "n")
+legend("topleft",legend=labe,cex=0.7, bty = "n",y.intersp=1)
+print(C)
+par(mfrow=c(1,1))
+
+```
+
+Superposition of the sample with components theoretical patterns.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+cols = c(2,3,4,6,"orange",7,5,"steelblue", "gold", "firebrick", "forestgreen") 
+# more colors can be added according to  https://r-charts.com/colors/
+colnames(resydata)
+names(coef(fit))
+
+rdta = sapply(c(1:ncol(resydata)),function(ii){resydata[,ii]*coef(fit)[ii]})
+head(rdta)
+colnames(rdta) = colnames(resydata)
+
+
+plot(Xn, Yn,type="l", col=0, xlim=c(xmin,xmax), ylim=c(0,100), xlab="m/z",ylab = "Relative intensity (%)")
+for(ii in 1:ncol(resydata)){
+   points(Xn, rdta[,ii],type="l",col=(ii+1),lty=1)
+}
+points(Xn, Yn,type="l",col=1,lty=1)
+legend("topleft",c(colnames(resydata),"sum"),lty=c(rep(3,ncol(resydata)),1),col=c(cols[1:ncol(resydata)],1),cex=0.7)
+
+## detail
+x1 = 465 # it should be modified by a user
+x2 = 470 # it should be modified by a user
+plot(Xn, Yn,type="l", col=0, xlim=c(x1,x2), ylim=c(0,100), xlab="m/z",ylab = "Relative intensity (%)")
+for(ii in 1:ncol(resydata)){
+   points(Xn, rdta[,ii],type="l",col=(ii+1),lty=1)
+}
+points(Xn, Yn,type="l",col=1,lty=1)
+legend("topleft",c(colnames(resydata),"sum"),lty=c(rep(3,ncol(resydata)),1),col=c(cols[1:ncol(resydata)],1),cex=0.7)
+
+```
+
+Spectrum cosine similarity (Stein, Scott 1994) of the sample and the model mass spectra.
+
+cos θ = (u %\*% v) / (sqrt(sum(u\^2)) \* sqrt(sum(v\^2)))
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# cosine similarity
+library(OrgMassSpecR)
+spec.top = as.data.frame(cbind(Xn,ya))
+spec.bottom = as.data.frame(cbind(Xn,Yn))
+phi = OrgMassSpecR::SpectrumSimilarity(spec.top, spec.bottom, t = 0.25, b = 10, top.label = NULL, bottom.label = NULL, xlim = c(xmin, xmax), x.threshold = 0, print.alignment = FALSE, print.graphic = FALSE, output.list = FALSE)
+phi
+cos(phi)
+
+```
+
+Blank et al. (2002) use comparison of cumulative distribution functions of the sample and the model mass spectra. Kolmogorov-Smirnov test may be used for quantification of the difference. R library *stats* was used for the calculations.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(ggplot2)
+library(clusterSim)
+
+cdfs = clusterSim::data.Normalization (cumsum(Yn),type="n4",normalization="row")
+cdfm = clusterSim::data.Normalization (cumsum(ya),type="n4",normalization="row")
+
+plot(Xn,cdfm,type="l",col=2, xlab="m/z", ylab="CDF")
+points(Xn,cdfs,type="l",col=1, lty=2)
+legend("topleft",c("model","sample"),lty=c(1,2),col=c(2,1),cex=.8)
+
+# https://stackoverflow.com/questions/64261430/demonstration-of-the-2-sample-cramer-von-mises-statistic-how-to-show-the-lines
+# https://www.geeksforgeeks.org/visualizing-the-kolmogorov-smirnov-statistic-in-ggplot2-using-r/
+
+
+## Kolmogorov-Smirnov test
+
+ks_test <- ks.test(Yn, ya, alternative = "two.sided")
+ks_test
+
+# bootstrap Kolmogorov-Smirnov test
+library(Matching)
+ks.boot(Yn, ya, nboots=1000, alternative = "two.sided")
+        
+# permutation Kolmogorov-Smirnov test
+library(twosamples)
+ks_test(Yn, ya, nboots=1000, p=0.95, keep.boots=T, keep.samples=F)
+
+```
+
+Similarity , difference and regression plots (Jeon et al. 2023), cave plot (Becker et al. 1994) and Bland-Altman plot (Tsikas 2023).
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+# Similarity plot (according to library OrgMassSpecR)
+library(OrgMassSpecR)
+spec.top = as.data.frame(cbind(Xn,ya))
+spec.bottom = as.data.frame(cbind(Xn,Yn))
+OrgMassSpecR::SpectrumSimilarity(spec.top, spec.bottom, t = 0.25, b = 10, top.label = NULL, bottom.label = NULL, xlim = c(xmin, xmax), x.threshold = 0, print.alignment = FALSE, print.graphic = TRUE, output.list = FALSE)
+
+
+## Similarity plot
+plot.new()
+plot.window(ylim = c(-100, 100), xlim = range(Xn))
+p <- list(axes = FALSE, xlab = "m/z", ylab = "Relative intensity (%)", main = "")
+par(new = TRUE)  
+do.call(plot, c(list(x = Xn, y = Yn, ylim = c(-100, 100),type="l",col=2), p))
+par(new = TRUE)
+do.call(plot, c(list(x = Xn, y = ya, ylim = c(100, -100),type="l",col=4), p))
+axis(side = 2, 
+     at = pretty(par()$usr[3:4]), 
+     labels = abs(pretty(par()$usr[3:4])))
+axis(side = 1)
+legend("topleft",legend=c("sample","reference"), lty=1, col=c(2,4),cex=0.8)
+
+
+## Difference plot
+Dif = Yn-ya
+plot(Xn,Dif,xlab="m/z",ylab="difference",type="s")
+
+
+## Cave plot
+cave.plot <- function(x, y, x.top, y.top, overlap, xaxis.at, xaxis.lab,yaxis.at, yaxis.lab, xlab="", ylab=""){
+  yl <- range(y)
+  yd <- diff(yl)
+  ymax <- yl[2] + ((100 - overlap)/100)*yd
+  right.at <- ymax - yaxis.at
+  y.top <- ymax - y.top
+  xall <- c(x,x.top)[!is.na(c(x,x.top))]
+  xl <- c(min(xall)-.03*diff(range(xall)),max(xall)+.03*diff(range(xall)))
+  plot(x,y,type="h",xlab=xlab,ylab=ylab,axes=F,ylim=c(0,ymax),xlim=xl, yaxs = "i", xaxs = "i",main="",cex.lab=1)
+  usr <- par("usr")
+  segments(x,rep(0,length(x)),x,y,col=2)
+  axis(2,cex=.4,at=yaxis.at,labels=yaxis.lab,tck=-.01,cex.axis=.9)
+  box()
+  par(mgp=c(.75,.25,0))
+  axis(1,at=xaxis.at,labels=xaxis.lab,tck=-.01,cex.axis=.9)
+  axis(3,at=xaxis.at,labels=xaxis.lab,tck=-.01,cex.axis=.9)
+  segments(x.top,rep(ymax,length(x.top)),x.top,y.top,col=4)
+  axis(4,cex=.4,at=right.at,labels=yaxis.lab,tck=-.01,cex.axis=.9)
+  box()
+  usr <- par("usr")
+  segments(usr[1:2],c(ymax,0),usr[1:2],c(max(yaxis.at), min(right.at)), col=0)
+  segments(c(usr[1],max(xall)), c(ymax,0),c(min(xall), usr[2]),c(ymax,0),col=0)
+}
+cave.plot(x=Xn, y=Yn, x.top=Xn, y.top=ya, overlap=0, xaxis.at=c(0,50,100), xaxis.lab=c(0,50,100),yaxis.at=c(0,50,100), yaxis.lab=c(0,50,100), xlab="m/z", ylab="Relative intensity (%)")
+legend("topleft",legend=c("sample","reference"), lty=1, col=c(2,4),cex=0.6)
+
+
+
+```
+
+### Finding and selection of peaks
+
+using *MALDIquant* library using S/N ratio and MALDIrppa library using treshold. Treshold can be estimated according to Zhurov et al. (2014)
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(MALDIquant)
+library(MALDIrppa)
+
+
+## Sample
+
+# Peak selection according to SNR
+
+spectrum <- createMassSpectrum(Xn,Yn)
+peaks1 <- MALDIquant::detectPeaks(spectrum,method="MAD",SNR=20) # SNR and halfWindowSize (for SuperSmoother method) can be modified by a user
+# method=c("MAD", "SuperSmoother")
+peaks1@mass = sapply(peaks1@mass,function(x) round(x,3)) 
+spm1 = cbind(peaks1@mass,peaks1@intensity)
+
+plot(Xn,Yn,type="l", xlab="m/z", ylab="Intensity")
+points(spm1[,1],spm1[,2],pch=4,col=2)
+legend("topright","identified peaks",col=2,pch=4,cex=0.7)
+
+plot(Xn,Yn,type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(peaks1, mass=xmin:xmax, underline=FALSE,avoidOverlap=TRUE,digits=2,col=2)
+
+
+# Peak selection with treshold
+
+treshInt = 1.85
+peaks2 <- MALDIrppa::rawToPeaks(Xn,as.matrix(Yn))
+peaks2 <- MALDIrppa::deletePeaks(peaks2, min = treshInt)
+peaks2[[1]]@mass = sapply(peaks2[[1]]@mass,function(x) round(x,3)) 
+spm2 = cbind(peaks2[[1]]@mass,peaks2[[1]]@intensity)
+
+plot(Xn,Yn,type="l", xlab="m/z", ylab="Intensity")
+abline(h=treshInt,col=2,lty=2)
+
+plot(Xn,Yn,type="l", xlab="m/z", ylab="Intensity")
+points(spm2[,1],spm2[,2],pch=4,col=2)
+legend("topright","identified peaks",col=2,pch=4,cex=0.7)
+
+plot(Xn,Yn,type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(peaks2[[1]], mass=min(spm2[,1]):max(spm2[,1]), underline=FALSE,avoidOverlap=TRUE,digits=2,col=2)
+
+
+# Treshold estimation according to Zhurov et al. (2014)
+plot(density(log(speak2[[1]]@intensity),bw="nrd0"),main="",xlab="m/z")
+# bw = "nrd0" (Silverman), "nrd" (Scott), "SJ" (Sheather, Jones), "ucv" (unbiased CV), "bcv" (biased CV)   # it can be chosen by a user  
+rug(log(Yn))
+tt = 1.85 # should be modified according to the plot
+abline(v=tt,col=2,lty=2)
+
+# number of peaks identified
+nrow(spm2)
+
+
+## Reference pattern
+
+spectrumr <- createMassSpectrum(Xn,as.vector(ya))
+peaksr <- MALDIquant::detectPeaks(spectrumr,method="MAD",SNR=3) # SNR and halfWindowSize (for SuperSmoother method) can be modified by a user
+# method=c("MAD", "SuperSmoother")
+peaksr@mass = sapply(peaksr@mass,function(x) round(x,3)) 
+rpm = cbind(peaksr@mass,peaksr@intensity)
+
+# number of peaks identified
+nrow(rpm)
+
+plot(Xn,Yn,type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(peaksr, mass=xmin:xmax, underline=FALSE,avoidOverlap=TRUE,digits=2,col=2)
+
+#intersect(spm2[,1],rpm[,1])
+
+
+## Clusters patterns
+
+ppeaks1 = function(ii){ 
+  X=nprofiles[[ii]]
+  spectrumc <- createMassSpectrum(X[,1],X[,2])
+  peaksc <- MALDIquant::detectPeaks(spectrumc,method="MAD",SNR=3)
+  # method=c("MAD", "SuperSmoother")
+  peaksc@mass = sapply(peaksc@mass,function(x) round(x,3)) 
+  cpm = cbind(peaksc@mass,peaksc@intensity)
+  plot(X[,1],X[,2],type="l",xlab="m/z",ylab="Intensity",ylim=c(0,110)) #,main=names(nprofiles)[ii],cex.main=0.8)
+  legend("topleft",names(nprofiles)[ii],cex = 0.8)
+  MALDIquant::labelPeaks(peaksc, mass=min(X[,1]):max(X[,1]), underline=FALSE,avoidOverlap=TRUE,digits=2,col=2)
+  return(cpm)
+}
+pp1 = lapply(c(1:length(nprofiles)), ppeaks1)
+names(pp1)= names(nprofiles)
+pp1
+
+ppeaks2 = function(X){ 
+  spectrumc <- createMassSpectrum(X[,1],X[,2])
+  peaksc <- MALDIquant::detectPeaks(spectrumc,method="MAD",SNR=3)
+  # method=c("MAD", "SuperSmoother")
+  cpp = sort(unique(round(peaksc@mass,1)))
+  cpp
+}
+pp2 = lapply(nprofiles, ppeaks2)
+pp2
+
+
+
+```
+
+Empirical cumulative distribution plot (Blank et al. 2002), and similarity plot for peaks.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(ggplot2)
+library(clusterSim)
+
+spm = spm1 # spm2
+
+cdfs = clusterSim::data.Normalization (cumsum(spm[,2]),type="n4",normalization="row")
+cdfm = clusterSim::data.Normalization (cumsum(rpm[,2]),type="n4",normalization="row")
+
+plot(rpm[,1],cdfm,type="l",col=2, xlab="m/z", ylab="CDF")  # type="s"
+points(spm[,1],cdfs,type="l",col=1, lty=2)
+legend("topleft",c("model","sample"),lty=c(1,2),col=c(2,1),cex=.8)
+
+
+## Similarity plot
+plot.new()
+plot.window(ylim = c(-100, 100), xlim = range(Xn))
+p <- list(axes = FALSE, xlab = "m/z", ylab = "Relative intensity (%)", main = "")
+par(new = TRUE)  
+do.call(plot, c(list(x = spm[,1], y = spm[,2], ylim = c(-100, 100),type="h",col=2), p))
+par(new = TRUE)
+do.call(plot, c(list(x = rpm[,1], y = rpm[,2], ylim = c(100, -100),type="h",col=4), p))
+axis(side = 2, 
+     at = pretty(par()$usr[3:4]), 
+     labels = abs(pretty(par()$usr[3:4])))
+axis(side = 1)
+legend("topleft",legend=c("sample","reference"), lty=1, col=c(2,4),cex=0.8)
+
+
+```
+
+Barcode plot, gelmap plot (library *PROcess*), and peak pattern plot (library *MALDIrppa*) can be used for visualization of peaks of the sample and the model.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(MALDIrppa) 
+library(PROcess)
+library(reshape2)
+library(ggplot2)
+
+
+### Barcode plot
+
+# MS of sample + theoretical components (clusters)
+bar1 = pp2
+bar1[["Sample"]] <- spm[,1]
+bar1
+
+# MS of sample + model
+bar2 = NULL
+bar2[["Sample"]] <- spm[,1]
+bar2[["Reference"]] <- rpm[,1]
+bar2
+
+# MS of model + theoretical components (clusters)
+bar3 = pp2
+bar3[["Reference"]] <- rpm[,1]
+bar3
+
+my_list = bar1 # it can be chosen by a user (bar1, bar2, bar3)
+all_values <- seq(xmin,xmax,0.1)
+presence_absence_matrix <- matrix(0, nrow = length(all_values), ncol = length(my_list)) 
+colnames(presence_absence_matrix) <- names(my_list) 
+rownames(presence_absence_matrix) <- all_values
+for(i in seq_along(my_list)) { presence_absence_matrix[all_values %in% my_list[[i]], i] <- 1 } 
+presence_absence_df <- as.data.frame(presence_absence_matrix)
+presence_absence_df[,"mz"] = as.numeric(rownames(presence_absence_df))
+head(presence_absence_df)
+
+data <- reshape2::melt(presence_absence_df,id="mz") 
+colnames(data) <- c("mz", "group", "value") 
+
+ggplot2::ggplot(data) + 
+  geom_point(aes(x = mz, y = 2)) + 
+  geom_vline(aes(xintercept = mz), data = subset(data, value == "1")) + 
+  coord_cartesian(ylim = c(0, 1)) + 
+  facet_wrap(~group, ncol = 1, strip.position = 'left') + 
+  theme( axis.title.y = element_blank(), 
+         axis.text.y = element_blank(), 
+         axis.ticks.y = element_blank(), 
+         panel.grid.minor.y = element_blank(), 
+         panel.grid.major.y = element_blank() )
+
+
+
+### Gel map
+
+# MS of sample + theoretical components (clusters)
+BAR1 = pp1
+BAR1[["Sample"]] <- spm1
+BAR1
+
+# MS of sample + model
+BAR2 = pp1
+BAR2[["Sample"]] <- spm1
+BAR2[["Reference"]] <- rpm
+BAR2
+
+# MS of model + theoretical components (clusters)
+BAR3 = pp1
+BAR3[["Reference"]] <- rpm
+BAR3
+
+spectra_list <- BAR1
+
+all_mz <- unique(do.call(c, lapply(spectra_list, function(s) s[,1])))
+all_mz <- sort(all_mz)
+intensity_matrix <- matrix(0, nrow = length(all_mz), ncol = length(spectra_list))
+rownames(intensity_matrix) <- all_mz
+colnames(intensity_matrix) <- names(spectra_list)
+for (i in seq_along(spectra_list)) {
+  spectrum <- spectra_list[[i]]
+  for (j in seq_along(spectrum[,1])) {
+    mz_value <- spectrum[,1][j]
+    intensity_value <- spectrum[,2][j]
+    intensity_matrix[as.character(mz_value), i] <- intensity_value
+  }
+}
+df_intensity <- as.data.frame(intensity_matrix)
+
+M = (intensity_matrix)^1/3
+# M = sqrt(intensity_matrix)
+PROcess::gelmap(M, col = gray(seq(1, 0, by = -0.01)), at.mz = rownames(M), at.col = NULL, cexCol = 0.8)
+# cols = gray(seq(1, 0, by = -0.01))
+# col = gray.colors(50, start = 0.3, end = 0.9, gamma = 2.2, alpha, rev = FALSE)
+
+
+### Peak pattern plot
+
+ispatt = nprofiles
+ispatt[["Sample"]] <- cbind(Xn,Yn)
+spectr1 <- lapply(ispatt,function(X) MALDIquant::createMassSpectrum(X[,1],X[,2]))
+peakp <- MALDIquant::detectPeaks(spectr1,halfWindowSize=20, method="SuperSmoother",SNR=10)
+# method=c("MAD", "SuperSmoother")
+#peakp <- binPeaks(peakp, method="strict", tolerance=0.001)
+# method=c("strict", "relaxed", "reference")
+names(peakp) = names(ispatt)
+MALDIrppa::peakPatterns(peakp, barplot = FALSE)
+cbind(c(1:length(peakp)),names(peakp))
+
+
+```
+
+Monoisotopic mass
+
+```{r}
+
+
+formula <- "Se6Te2O6"
+
+
+# Parsing chemical formula
+
+parse_formula <- function(formula) {
+  pattern <- "([A-Z][a-z]*)([0-9]*)"
+  matches <- regmatches(formula, gregexpr(pattern, formula))[[1]]
+  elements <- sapply(matches, function(x) sub(pattern, "\\1", x))
+  counts <- sapply(matches, function(x) {
+    count <- sub(pattern, "\\2", x)
+    ifelse(count == "", 1, as.numeric(count))
+  })
+  names(counts) <- elements
+  return(counts)
+}
+parse_formula(formula)
+
+
+# alternatives (in CHNOSZ and MetaboCoreUtils)
+library(CHNOSZ)
+count.elements(formula)
+library(MetaboCoreUtils)
+countElements(formula)
+
+
+### Monoisotopic masses of elements
+
+library(enviPat)
+data(isotopes)
+# isotopes
+Monoisotopic_mass_elem = function(ii){
+  elem = isotopes[which(isotopes$element==ii),]
+  M = elem[which.max(elem$abundance),3]
+  return(M) 
+}
+monoisotopic_masses = lapply(unique(isotopes$element),Monoisotopic_mass_elem)
+# sapply(unique(isotopes$element),Monoisotopic_mass_elem)
+names(monoisotopic_masses) = unique(isotopes$element)
+monoisotopic_masses
+
+
+### Monoisotopic mass of a molecule
+
+calculate_monoisotopic_mass <- function(formula) {
+  counts <- parse_formula(formula)
+  mass <- sum(sapply(c(1:length(counts)), function(ii){unlist(monoisotopic_masses[names(counts)])[ii] %*% counts[ii]}))
+  return(mass)
+}
+
+monoisotopic_mass <- calculate_monoisotopic_mass(formula)
+monoisotopic_mass
+
+
+```
+
+### **References**
+
+Becker, R. A., Clark, L. A., Lambert, D. 1994. Cave plots: A graphical technique for comparing time series. *Journal of Computational and Graphical Statistics*, 3 (3), 277-283. DOI: 10.1080/10618600.1994.10474645
+
+Blank, P. S., Sjomeling, C. M., Backlund, P. S., Yergey, A. L. 2002. Use of cumulative distribution functions to characterize mass spectra of intact proteins. *Journal of the American Society for Mass Spectrometry*, 13, 40-46. DOI: 10.1016/S1044-0305(01)00338-5
+
+Brauman, J. I. 1966. Least squares analysis and simplification of multi-isotope mass spectra. *Analytical Chemistry*, 38 (4), 607-610. DOI:10.1021/AC60236A020
+
+Pečinka, L., Prokeš, L., Havel, J. 2019. Gallium selenide clusters generated via laser desorption ionisation quadrupole ion trap time-of-flight mass spectrometry. *Rapid Communications in Mass Spectrometry*, 33 (7), 719-726. DOI: 10.1002/rcm.8403
+
+Stein, S. E., Scott, D. R. 1994. Optimization and testing of mass spectral library search algorithms for compound identification. *Journal of the American Society for Mass Spectrometry*, 5 (9), 859-866. DOI: 10.1016/1044-0305(94)87009-8
+
+Zhurov, K. O., Kozhinov, A. N., Fornelli, L., Tsybin, Y. O. 2014. Distinguishing analyte from noise components in mass spectra of complex samples: Where to cut the noise? *Analytical Chemistry*, 86, 3308-3316. DOI: 10.1021/ac403278t
 
