@@ -1,0 +1,750 @@
+---
+title: "Using R for interpretation of LDI TOF mass spectra"
+author: "Lubomír Prokeš, Lukáš Pečinka"
+format: html
+editor: visual
+---
+
+## Example: GaSe clusters - whole spectrum
+
+(Pečinka et al. 2019)
+
+Data input
+
+```{r, echo=FALSE, warning=FALSE}
+
+library(openxlsx)
+RMSq <- read.xlsx("c:\\Users\\Admin\\Dropbox\\low 300  pos 130 Ga-Se1-1.xlsx",sheet = "low 300  pos 130 Ga-Se1-1", startRow = 1, colNames = FALSE, rowNames = FALSE,detectDates = FALSE, skipEmptyRows = TRUE, rows = NULL, cols = NULL,check.names = FALSE)
+head(RMSq)
+
+
+plot(RMSq[,1],RMSq[,2],type="l",col="black", xlab="m/z", ylab="intensity (mV)")
+
+```
+
+**Resampling of mass spectra** with different number of points in given range is necessary to obtain their compatibility.
+
+```{r}
+
+MZmin = 2000
+MZmax = 4000
+
+newMZ <- c(seq(from=MZmin,to=MZmax,by=0.001))
+length(newMZ)
+
+resampMSs <- function(X){
+  yi <- spline(x=RMSq[,1],y=RMSq[,2],n=10000,xout=newMZ,method="fmm",ties=mean)
+  # method = c("fmm", "periodic", "natural", "monoH.FC", "hyman")
+  rsmp <- MALDIquant::createMassSpectrum(mass=yi$x, intensity=yi$y)
+  return(rsmp)
+}
+RMSqr <- sapply(RMSq,function(X){resampMSs(X)})
+# RMSq <- RMSqr
+
+```
+
+#### Mass spectra normalization
+
+Signals in a given region are converted from units (mV) to a normalized percentage value, where 100% is assigned to the signal with the highest intensity in a given cumulative isotopic envelope. \### unitization with zero minimum using library *clusterSim*.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+library(clusterSim)
+Yn = 100*clusterSim::data.Normalization(RMSq[,2],type="n4",normalization="row")
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="intensity [%]", ylim=c(0,100))
+
+
+```
+
+**Mass spectrum pre-processing**
+
+Library *MALDIquant* (Gibb, Strimmer 2012) is comprehensive package for pre-processing mass spectra. Some pre-processing and diagnostics functions are also available in *MALDIrppa, MassSpecWavelet* and *PROcess* libraries.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(MALDIquant)
+library(MALDIrppa)
+library(PROcess)
+library(clusterSim)
+
+
+### Decreasing their m/z resolution
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+ders <- MALDIrppa::redResolution(spectrum, by = 200)
+spd = cbind(ders@mass,ders@intensity)
+
+plot(ders@mass,ders@intensity,type="l",xlab="m/z",ylab="Intensity")
+
+
+### Trimming mass spectrum
+xmin = 430
+xmax = 500
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+trs <- MALDIquant::trim(spectrum,c(xmin,xmax))
+spt = cbind(trs@mass,trs@intensity)
+# remove all mass lower 3000    range=c(3000, Inf)
+# remove all mass higher 8000   range=c(0, 8000)
+
+
+### Intensity transformation
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+ttrs <- MALDIquant::transformIntensity(spectrum,method="sqrt")
+sptt = cbind(ttrs@mass,ttrs@intensity)
+# method=c("sqrt", "log", "log2", "log10")
+
+ttrs <- MALDIrppa::transfIntensity(list(spectrum), fun = sqrt)
+# fun =   user defined function
+sptt = cbind(ttrs[[1]]@mass,ttrs[[1]]@intensity)
+
+
+### Spectrum scaling
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+
+scale <- function(x){(x-min(x))/(max(x)-min(x))} # define scaling function, see 
+scs <- MALDIrppa::transfIntensity(spectrum, fun = scale)
+scst = cbind(scs@mass,scs@intensity)
+
+scs <- clusterSim::data.Normalization(RMSq[,2],type="n4",normalization="row")
+scst = cbind(RMSq[,1],scs)
+
+
+### Noise estimation
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+noi <- MALDIquant::estimateNoise(spectrum,method="MAD") 
+# method=c("MAD", "SuperSmoother")
+
+
+### Smoothing
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+sms1 <- MALDIquant::smoothIntensity(spectrum, method="SavitzkyGolay",halfWindowSize=120)
+# method=c("SavitzkyGolay", "MovingAverage")
+smsp1 = cbind(sms1@mass,sms1@intensity)
+
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+is.list(spectrum)
+sms2 <- MALDIrppa::wavSmoothing(list(spectrum), thresh.scale = 2.5) # pdf
+# see wavShrink in wmtsa package
+sms2 <- MALDIrppa::wavSmoothing(list(spectrum),method = "Wavelet",n.levels = 4) # web
+# method = c("Wavelet", "SavitzkyGolay", "MovingAverage")
+smsp2 = cbind(sms2[[1]]@mass,sms2[[1]]@intensity)
+
+
+### Baseline correction
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+bas <- MALDIquant::removeBaseline(spectrum,method="SNIP")
+# method=c("SNIP", "TopHat", "ConvexHull", "median")
+basc1 = cbind(bas@mass,bas@intensity)
+
+basc2 <- PROcess::bslnoff(RMSq,qntl=0.1,method="loess",bw=0.1,plot=FALSE)
+
+
+```
+
+**Colors**
+
+colorpalettes choosing for plotting
+
+```{r}
+
+library(RColorBrewer)
+display.brewer.all()
+
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nb.cols)
+
+```
+
+### **Peaks identification and selection**
+
+Peaks identification and selection 1) according to SNR with function *detectPeaks* from *MALDIiquant* library or 2) using treshold with *rawToPeaks* and *deletePeaks* functions from *MALDIrppa* library. For the treshold selection, estimation according to Zhurov et al. 2014 was implemented. For peaks grouping function *GetGroupFactor* from *InterpretMSSpectrum* library was employed.
+
+```{r}
+
+library(MALDIquant)
+library(MALDIrppa)
+library(InterpretMSSpectrum)
+
+spectrum <- MALDIquant::createMassSpectrum(RMSq[,1],RMSq[,2])
+
+
+### Peaks up to SNR
+
+speak1 <- MALDIquant::detectPeaks(spectrum,method="MAD",SNR=80)
+# method=c("MAD", "SuperSmoother")
+peaks1 = cbind(speak1@mass,speak1@intensity)
+length(speak1@mass) # number of peaks
+MALDIrppa::summaryPeaks(list(speak1), digits = 4)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+rug(peaks1[,1],col="gray")
+
+
+ims = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks1), gap=15)
+ims = as.numeric(ims)
+nc = length(unique(ims))
+
+clrange = function(ii){
+  xx = peaks1[,1][which(ims==ii)]
+  return(range(xx))
+}
+rang = sapply(unique(ims),clrange)
+rang = rang[ , colSums(is.na(rang))==0]
+rownames(rang) = c("lower","upper")
+nc = ncol(rang)
+colnames(rang) = c(1:nc)
+rang
+
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+for(ii in c(1:nc)){
+  rug(peaks1[,1][which(ims==ii)], col=mycolors[ii])
+}
+
+
+clmax = function(ii){
+  xx = peaks1[,1][which(ims==ii)]
+  yy = peaks1[,2][which(ims==ii)]
+  return(xx[which.max(yy)])
+}
+maxg = sapply(unique(ims),clmax)
+maxg = na.omit(unlist(maxg))
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(speak1, mass=as.numeric(maxg), underline=TRUE,avoidOverlap=TRUE,col=1)
+
+
+# Peaks with treshold 
+
+treshInt = 0.7
+speak2 <- MALDIrppa::rawToPeaks(RMSq[,1],as.matrix(RMSq[,2]))
+MALDIrppa::countPeaks(speak2) # number of peaks
+length(speak2[[1]]@mass) # number of peaks
+speak2 <- MALDIrppa::deletePeaks(speak2, min = treshInt)
+MALDIrppa::summaryPeaks(speak2, digits = 4)
+peaks2 = cbind(speak2[[1]]@mass,speak2[[1]]@intensity)
+nrow(peaks2)
+
+ims = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks2), gap=10) 
+ims = as.numeric(ims)
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+rug(peaks2[,1],col="gray")
+nc = length(unique(ims))
+
+clrange = function(ii){
+  xx = peaks2[,1][which(ims==ii)]
+  return(range(xx))
+}
+rang = sapply(unique(ims),clrange)
+rang = rang[ , colSums(is.na(rang))==0]
+rownames(rang) = c("lower","upper")
+nc = ncol(rang)
+colnames(rang) = c(1:nc)
+rang
+
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+for(ii in c(1:nc)){
+  rug(peaks2[,1][which(ims==ii)], col=mycolors[ii])
+}
+
+
+clmax = function(ii){
+  xx = peaks2[,1][which(ims==ii)]
+  yy = peaks2[,2][which(ims==ii)]
+  return(xx[which.max(yy)])
+}
+maxg = sapply(unique(ims),clmax)
+maxg = na.omit(unlist(maxg))
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(speak2[[1]], mass=as.numeric(maxg), underline=TRUE,avoidOverlap=TRUE,col=1)
+
+
+# Treshold estimation according to Zhurov et al. 2014
+speak3 <- MALDIrppa::rawToPeaks(RMSq[,1],as.matrix(RMSq[,2]))
+
+plot(density(log10(speak3[[1]]@intensity),bw="nrd"),main="")
+# bw = "nrd0" (Silverman), "nrd" (Scott), "SJ" (Sheather, Jones), "ucv" (unbiased CV), "bcv" (biased CV)   # it can be chosen by a user  
+rug(log10(speak3[[1]]@intensity))
+tt = 0.5
+abline(v=tt,col=2,lty=2)
+
+plot(RMSq[,1],RMSq[,2],type="h", xlab="m/z", ylab="Intensity")
+abline(h=10^(tt),col=2,lty=2)
+
+
+```
+
+```{r}
+
+# for "rang" calculation - see previous chunk
+
+Ranges = rbind(sapply(rang[1,],floor), sapply(rang[2,],ceiling))
+rownames(Ranges) = rownames(rang)
+
+# Clusters identification for whole spectrum (for exploratory purposes onlz, for detailed analzsis of particular clusters see Suppl II)
+
+library(rcdk)
+
+clustForm = function(ii){
+EL1 = "Ga"
+EL2 = "Se"
+xmin = Ranges[1,ii]
+xmax = Ranges[2,ii]
+Mass = 0.96*xmax # it can be modified by a user
+Window = ceiling((xmax-xmin)/1.75) # it can be modified by a user
+element_1 = 50
+element_2 = 50
+# Max number of atoms, it can be modified by a user
+listform = rcdk::generate.formula(Mass, window=Window, validation=FALSE, charge=1,   # it can be modified by a user
+          elements=list(c("Ga",0,element_1),c("Se",0,element_2)) )
+  listform
+}
+LF = lapply(c(1:ncol(Ranges)),clustForm)
+LF
+
+
+```
+
+## Model theoretical mass spectra
+
+function for generation formulas of two-elemental clusters for maximum number of atoms of particular elements and subsequent functions for filtering of clusters in given m/z interval.
+
+Model mass spectrum is generated using random choice of clusters and intensities, and modelling of their mass spectra and generation of model mass spectrum containing generated clusters mass spectra
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(CHNOSZ)
+library(enviPat)
+library(clusterSim)
+library(RColorBrewer)
+
+
+### Generation of formulas
+
+gformulas = function(El1, nmax1, El2, nmax2){
+  x1 = paste0(rep(El1,(nmax1+1)),c(0:nmax1))
+  x1[2] = El1
+  x2 = paste0(rep(El2,(nmax2+1)),c(0:nmax2))
+  x2[2] = El2
+  d = expand.grid(x = x1, y = x2)
+  frm = paste0(d[,1],d[,2])[-1]
+  frm = gsub(paste0(El1,0),"", frm)
+  frm = gsub(paste0(El2,0),"", frm)
+  return(frm)
+}
+formulas = gformulas(El1 = "Ga", nmax1 = 14, El2 = "Se", nmax2 = 22)
+
+
+### Clusters in particular range of average masses (from formulas)
+massclust = function(forms,mmin,mmax){
+   AMs = CHNOSZ::mass(forms)
+   nm = which(AMs >= mmin & AMs <= mmax)
+   return(forms[nm])
+}
+rforms = massclust(forms=formulas, mmin = 170, mmax = 1750)
+length(rforms)
+
+
+### Random sample of Ns spectra from the range
+set.seed(123)
+Ns = 12
+chemforms = sample(rforms, size=Ns, replace = FALSE, prob = NULL)
+C = sample(c(10:100), size=Ns, replace = TRUE, prob = NULL)
+names(C) = chemforms
+
+
+### Model spectrum
+
+range(RMSq[,1])
+mmin = 170
+mmax = 1750
+resol = 6000
+
+data(isotopes)
+pattern = enviPat::isopattern(isotopes, chemforms, threshold = 0.001, charge = FALSE, emass = 0.00054858, plotit = FALSE, algo=1, rel_to = 0,verbose = TRUE, return_iso_calc_amount = FALSE)
+
+profiles = enviPat::envelope(pattern, ppm = FALSE, dmz = "get", frac = 1/4, env = "Gaussian",resolution = resol, plotit = FALSE, verbose = TRUE)
+
+normfun = function(xx){ 
+  yy = clusterSim::data.Normalization (xx[,2],type="n4",normalization="row")
+  return(cbind(xx[,1],yy))
+} 
+nprofiles = lapply(profiles,normfun)
+#summary(nprofiles)
+#head(nprofiles[[1]])
+
+# superposition of the spectra
+cols = colorRampPalette(brewer.pal(Ns, "Dark2"))(length(nprofiles))
+names(cols) = chemforms
+
+plot(NULL, xlim=c(mmin,mmax), ylim=c(0,100), xlab="m/z",ylab="Norm. intensity (%)",main=paste("Resolution:",resol,sep = " "),cex.main=.8)
+
+nplot = function(xy){
+  xx1 = nprofiles[[xy]]
+  xx1[,2] = C[xy]*as.numeric(xx1[,2])
+  points(xx1[,1],xx1[,2],type="l",col=cols[xy])
+  abline(h=0,lty=2)
+  }
+lapply(chemforms,nplot)
+legend("topleft",chemforms,lty=1,col=cols,cex=.5)
+
+# Model cumulative spectrum
+resampMSs <- function(xx){ 
+  rsmp <<- approx(x=nprofiles[[xx]][,1],y=nprofiles[[xx]][,2], xout=RMSq[,1], method="linear",rule = 2)
+  #rsmp <<- spline(x=nprofiles[[xx]][,1],y=nprofiles[[xx]][,2],n=10000,xout=newmz,method="fmm",ties=mean)
+  # method = c("fmm", "periodic", "natural", "monoH.FC", "hyman")
+  return(C[xx]*rsmp$y)
+}
+resydata <- sapply(names(C),function(X){resampMSs(X)})
+resdata1 = apply(resydata,1,sum)
+resydata2 = sapply(names(C),function(x) resydata[,x]/resdata1)
+resdata = 100*data.Normalization(resdata1,type="n4",normalization="column")
+resdata2 = sapply(names(C),function(xx) resdata*resydata2[,xx])
+
+plot(RMSq[,1],resdata,type="l",xlab="m/z",ylab = "Relative intensity (%)",ylim=c(0,100))
+
+
+```
+
+### **Isotopic pattern comparison**
+
+Example of model mass spectra comparison for interferences in ICP-MS: Pt+ vs. HfO+
+
+```{r}
+
+library(enviPat)
+
+
+### isobaric interferences in ICP-MS
+
+chemformsm = c("Pt","HfO")
+names(chemformsm) = c("Pt+","HfO+")
+Cm = c(0.1,1)
+names(Cm) = names(chemformsm)
+CHNOSZ::mass(chemformsm)
+
+#chemformsm = c("Sn","PdO","RuO")
+#names(chemformsm) = c("Sn+","RuO+","PdO+")
+#Cm = c(1,1,1)
+#names(Cm) = names(chemformsm)
+#CHNOSZ::mass(chemformsm)
+
+resolm = 2000
+
+data(isotopes)
+patternm = enviPat::isopattern(isotopes, chemformsm, threshold = 0.001, charge = FALSE, emass = 0.00054858, plotit = FALSE, algo=1, rel_to = 0,verbose = TRUE, return_iso_calc_amount = FALSE)
+
+profilesm = enviPat::envelope(patternm, ppm = FALSE, dmz = "get", frac = 1/4, env = "Gaussian",resolution = resol, plotit = FALSE, verbose = TRUE)
+names(profilesm) = names(Cm)
+
+Xm = seq(193.500,196.500,0.005)
+# Xm = seq(111.500,128.500,0.005)
+
+resampMSs <- function(xx){
+  rsmpm <<- approx(x=profilesm[[xx]][,1],y=profilesm[[xx]][,2], xout=Xm, method="linear",rule = 2)
+  #rsmpm <<- spline(x=nprofiles[[xx]][,1],y=nprofiles[[xx]][,2],n=10000,xout=newmz,method="fmm",ties=mean)
+  # method = c("fmm", "periodic", "natural", "monoH.FC", "hyman")
+  return(Cm[xx]*rsmpm$y)
+}
+resydatam <- sapply(names(Cm),function(X){resampMSs(X)})
+head(resydatam)
+resdatam1 = apply(resydatam,1,sum)
+# resdatam1 = 100*data.Normalization(resdatam1,type="n4",normalization="column")
+resdatam1[is.nan(resdatam1)] <- 0
+
+resydatam2 = sapply(names(Cm),function(x) resydatam[,x]/resdatam1)
+resydatam2[is.nan(resydatam2)] <- 0
+max(resydatam2)
+
+plot(Xm,resdatam1,type="l",col=1,xlab="m/z",ylab = "Relative intensity (%)", xlim=c(min(Xm),max(Xm))) # xlim=c(189.5,198.5)
+for(ii in 1:ncol(resydatam)){
+    points(Xm,resydatam[,ii],type="l",col=cols[ii],lty=3)
+}
+legend("topleft",c(colnames(resydatam),"sum"),lty=c(rep(3,ncol(resydatam)),1),col=c(cols[1:ncol(resydatam)],1),cex=0.7)
+
+
+plot(Xm,resdatam1,type="l",col=1,xlab="m/z",ylab = "Relative intensity (%)", xlim=c(193.8,194.2)) # xlim=c(189.5,198.5)
+for(ii in 1:ncol(resydatam)){
+    points(Xm,resydatam[,ii],type="l",col=cols[ii],lty=3)
+}
+#points(Xm,resdatam1,type="l",col=1,lty=3)
+legend("topleft",c(colnames(resydatam),"sum"),lty=c(rep(3,ncol(resydatam)),1),col=c(cols[1:ncol(resydatam)],1),cex=0.7)
+
+```
+
+**Parsing chemical formula**
+
+Function for parsing chemical formulas of clusters to vector of numbers of atoms.
+
+```{r}
+
+
+parse_formula <- function(formula) {
+  pattern <- "([A-Z][a-z]*)([0-9]*)"
+  matches <- regmatches(formula, gregexpr(pattern, formula))[[1]]
+  elements <- sapply(matches, function(x) sub(pattern, "\\1", x))
+  counts <- sapply(matches, function(x) {
+    count <- sub(pattern, "\\2", x)
+    ifelse(count == "", 1, as.numeric(count))
+  })
+  names(counts) <- elements
+  return(counts)
+}
+cl = c("Ga6","Ga7","Ga5Se","Ga6Se","Ga4Se2", "Ga5Se2","Ga3Se3","Ga4Se3","Ga2Se4","Ga3Se4","GaSe5","Ga2Se5","Se6","GaSe6" )
+sapply(cl,function(xx)parse_formula(xx))
+
+
+```
+
+**Average, exact and monoisotopic mass**
+
+Computation average mass, exact mass and monoisotopic mass
+
+```{r}
+
+
+library(CHNOSZ)
+library(InterpretMSSpectrum)
+
+el = c("Ga","Se")
+
+### Average mass
+AM = CHNOSZ::mass(el)
+
+
+### Exact mass
+EM = InterpretMSSpectrum::get_exactmass(el)
+
+
+### Monoisotopic mass
+
+# List of elemental monoisotopic masses
+library(enviPat)
+data(isotopes)
+Monoisotopic_mass_elem = function(ii){
+  elem = isotopes[which(isotopes$element==ii),]
+  M = elem[which.max(elem$abundance),3]
+  return(M) 
+}
+monoisotopic_masses = lapply(unique(isotopes$element),Monoisotopic_mass_elem)
+# sapply(unique(isotopes$element),Monoisotopic_mass_elem)
+names(monoisotopic_masses) = unique(isotopes$element)
+monoisotopic_masses
+
+
+# Monoisotopic mass of elements
+
+el = c("Ga","Se")
+sapply(el,Monoisotopic_mass_elem)
+
+
+# Monoisotopic mass of clusters
+cluster_monoisotopic_mass <- function(formula) {
+  counts <- parse_formula(formula)
+  mass <- sum(sapply(c(1:length(counts)), function(ii){unlist(monoisotopic_masses[names(counts)])[ii] %*% counts[ii]}))
+  return(mass)
+}
+
+cl = c("Ga6","Ga7","Ga5Se","Ga6Se","Ga4Se2", "Ga5Se2","Ga3Se3","Ga4Se3","Ga2Se4","Ga3Se4","GaSe5","Ga2Se5","Se6","GaSe6" )
+sapply(cl,cluster_monoisotopic_mass)
+
+
+```
+
+**Kendrick mass (KM), Kendrick mass defect (KMD) and remainders of Kendrick mass (RKMD)**
+
+Calculation of Kendrick mass, Kendrick mass defect and remainders of Kendrick mass
+
+```{r}
+
+library(InterpretMSSpectrum)
+
+# Exact mass
+em = InterpretMSSpectrum::get_exactmass("Se")
+
+# Nominal mass from the exact mass
+nm = round(em,0)
+
+
+mz = speak1@mass   # speak2[[1]]@mass
+
+
+### Kendrick mass with classical base unit
+KM = MetaboCoreUtils::calculateKm(mz, fragment = nm/em)
+# KM = mz*(round(am,0)/am)
+
+
+### Kendrick mass with fractional base unit (Fouquet et al. 2017)
+c(round(((2/3)*em),0), round((2*em),0)) # values range of X
+X = 100
+KM = mz*(round((em/X),0)/(em/X))
+
+
+### Kendrick mass defect
+KMD = MetaboCoreUtils::calculateKmd(mz, fragment = nm/em)
+
+
+### Remainders of Kendrick mass (Fouquet et al. 2017)
+RKMD = KM/round(em,0) - floor(KM/round(em,0))
+
+
+
+plot(KM,KMD,xlab="KM",ylab="KMD")
+
+plot(mz,KMD,xlab="m/z",ylab="KMD")
+
+plot(mz,RKMD,xlab="m/z",ylab="RKMD")
+
+
+kmm = cbind(mz,KM,KMD,RKMD)
+colnames(kmm) = c("Mass","KM","KMD","RKMD")
+kmm
+
+
+```
+
+Generation set of binary molecular formulas El1(1-nmax1)El2(1-nmax2) of binary molecular clusters and list of clusters and their number in particular m/z interval for the generated clusters.
+
+```{r}
+
+library(CHNOSZ)
+
+
+### Generation of formulas
+
+gformulas = function(El1, nmax1, El2, nmax2){
+  x1 = paste0(rep(El1,(nmax1+1)),c(0:nmax1))
+  x1[2] = El1
+  x2 = paste0(rep(El2,(nmax2+1)),c(0:nmax2))
+  x2[2] = El2
+  d = expand.grid(x = x1, y = x2)
+  frm = paste0(d[,1],d[,2])[-1]
+  frm = gsub(paste0(El1,0),"", frm)
+  frm = gsub(paste0(El2,0),"", frm)
+  return(frm)
+}
+formulas = gformulas(El1 = "Ga", nmax1 = 12, El2 = "Se", nmax2 = 20)
+formulas
+
+
+### Clusters in particular range of average masses (from formulas)
+
+massclust = function(forms,mmin,mmax){
+   AMs = CHNOSZ::mass(forms)
+   nm = which(AMs >= mmin & AMs <= mmax)
+   return(forms[nm])
+}
+massclust(forms=formulas, mmin = 400, mmax = 550)
+
+
+```
+
+**2D mapping**
+
+Two dimensional mapping according to Artemenko et al. (2009) for list of clusters formulas
+
+```{r}
+
+form = cl   # viz chunk nize
+
+
+### Removal of [, ], + and -
+
+library(CHNOSZ)
+library(InterpretMSSpectrum)
+
+ext_string = function(xx){
+    extracted_string <- gsub(".*\\[(.*)\\].*", "\\1", xx)
+    final_string <- gsub("\\+", "", extracted_string)
+    print(final_string)
+}
+FORM = sapply(form,ext_string)
+
+
+
+### Average mass
+AM = CHNOSZ::mass(FORM)
+
+
+### Exact mass
+EM = InterpretMSSpectrum::get_exactmass(FORM)
+
+
+### Monoisotopic mass
+MM = sapply(FORM,cluster_monoisotopic_mass) # see 2 chunks above
+
+
+### Nominal mass from monoisotopic mass
+MN = trunc(0.5 + MM*(1999.0/2000.0))
+#MN = round(MM,0)
+
+
+# Normalized monoisotopic mass defect (NMD)
+NMD = 1000*(MM-MN)/MM
+
+# Normalized isotopic shift (NIS)
+NIS = 1000*(AM-MM)/MM
+
+
+plot(NMD, NIS, xlab="NMD", ylab="NIS")
+
+
+```
+
+2D mapping - simulation
+
+```{r}
+
+library(CHNOSZ)
+
+formulas = gformulas(El1 = "Ga", nmax1 = 12, El2 = "Se", nmax2 = 20)
+formulas
+
+
+### Average mass
+AM = CHNOSZ::mass(formulas)
+
+
+### Exact mass
+EM = InterpretMSSpectrum::get_exactmass(formulas)
+
+
+### Monoisotopic mass
+MM = sapply(formulas,cluster_monoisotopic_mass) # see 2 chunks above
+
+
+### Nominal mass from monoisotopic mass
+MN = trunc(0.5 + MM*(1999.0/2000.0))
+#MN = round(MM,0)
+
+
+# Normalized monoisotopic mass defect (NMD)
+NMD = 1000*(MM-MN)/MM
+
+# Normalized isotopic shift (NIS)
+NIS = 1000*(AM-MM)/MM
+
+
+plot(NMD, NIS, xlab="NMD", ylab="NIS")
+
+
+```
+
+**References**
+
+Artemenko, K. A., Zubarev, A. R., Samgina, T. Yu., Lebedev, A. T., Savitski, M. M., Zubarev, R. A. 2009. Two dimensional mass mapping as a general method of data representation in comprehensive analysis of complex molecular mixtures. *Analytical Chemistry*, 81 (10), 3738-3745. DOI: 10.1021/ac802532j
+
+Fouquet, T., Cody, R. B., Sato, H. 2017. Capabilities of the remainders of nominal Kendrick masses and the referenced Kendrick mass defects for copolymer ions. *Journal of Mass Spectrometry*, 52 (9), 618-624. https://doi.org/10.1002/jms.3963
+
+Gibb, S., Strimmer, K. 2012. MALDIquant: a versatile R package for the analysis of mass spectrometry data. *Bioinformatics*, 28 (17), 2270--2271. DOI: 10.1093/bioinformatics/bts447
+
+Meija, J., Caruso, J. A. 2004. Deconvolution of isobaric interferences in mass spectra. *Journal of the American Society for Mass Spectrometry*, 15 (5), 654-658. DOI: 10.1016/j.jasms.2003.12.016
+
+Pečinka, L., Prokeš, L., Havel, J. 2019. Gallium selenide clusters generated via laser desorption ionisation quadrupole ion trap time-of-flight mass spectrometry. *Rapid Communications in Mass Spectrometry*, 33 (7), 719-726. DOI: 10.1002/rcm.8403
+
+Zhurov, K. O., Kozhinov, A. N., Fornelli, L., Tsybin, Y. O. 2014. Distinguishing analyte from noise components in mass spectra of complex samples: Where to cut the noise? *Analytical Chemistry*, 86, 3308-3316. DOI: 10.1021/ac403278t
