@@ -243,84 +243,122 @@ kmm
 
 ```
 
-**Simulation Kendrick mass, Kendrick mass defect, and remainers of Kendrick mass**
-
 ```{r}
 
-## Exact mass
-EM1 = InterpretMSSpectrum::get_exactmass("Au")
-EM2 = InterpretMSSpectrum::get_exactmass("As")
-EM3 = EM1+EM2
-
-Au = c(1:50)*EM1
-As = c(1:50)*EM2
-AsAu = c(1:50)*EM3
-
-KM = calculateKm(sgm[,1], fragment = NM/EM)
-KMD = calculateKmd(sgm[,1], fragment = NM/EM)
-
-KM1 = calculateKm(Au, fragment = NM/EM)
-KMD1 = calculateKmd(Au, fragment = NM/EM)
-KM2 = calculateKm(As, fragment = NM/EM)
-KMD2 = calculateKmd(As, fragment = NM/EM)
-KM3 = calculateKm(AsAu, fragment = NM/EM)
-KMD3 = calculateKmd(AsAu, fragment = NM/EM)
-
-plot(KM,KMD,xlab="KM",ylab="KMD")
-points(KM1,KMD1,col=2,pch=16)
-points(KM2,KMD2,col=3,pch=16)
-points(KM3,KMD3,col=4,pch=16)
-# sgm[,1]
-
-plot(sgm[,1],KMD,xlab="m/z",ylab="KMD")
-points(Au,KMD1,col=2,pch=16)
-points(As,KMD2,col=3,pch=16)
-points(AsAu,KMD3,col=4,pch=16)
-
-## Nominal Kendrick mass
-NKM1 = sapply(KM1,function(xx){round(xx,0)})
-NKM2 = sapply(KM2,function(xx){round(xx,0)})
-NKM3 = sapply(KM3,function(xx){round(xx,0)})
-
-plot(NKM,KMD,xlab="NKM",ylab="KMD")
-points(NKM1,KMD1,col=2,pch=16)
-points(NKM2,KMD2,col=3,pch=16)
-points(NKM3,KMD3,col=4,pch=16)
+library(CHNOSZ)
 
 
-## Remainder of Kendrick mass
+### Generation of formulas
 
-KM1 = calculateKm(Au, fragment = NM/EM)
-KMD1 = calculateKmd(Au, fragment = NM/EM)
-KM2 = calculateKm(As, fragment = NM/EM)
-KMD2 = calculateKmd(As, fragment = NM/EM)
-KM3 = calculateKm(AsAu, fragment = NM/EM)
-KMD3 = calculateKmd(AsAu, fragment = NM/EM)
+gformulas = function(El1, nmax1, El2, nmax2){
+  x1 = paste0(rep(El1,(nmax1+1)),c(0:nmax1))
+  x1[2] = El1
+  x2 = paste0(rep(El2,(nmax2+1)),c(0:nmax2))
+  x2[2] = El2
+  d = expand.grid(x = x1, y = x2)
+  frm = paste0(d[,1],d[,2])[-1]
+  frm = gsub(paste0(El1,0),"", frm)
+  frm = gsub(paste0(El2,0),"", frm)
+  return(frm)
+}
+formulas = gformulas(El1 = "As", nmax1 = 12, El2 = "Au", nmax2 = 30)
+formulas
 
-plot(KM,KMD,xlab="KM",ylab="KMD")
-points(KM1,KMD1,col=2,pch=16)
-points(KM2,KMD2,col=3,pch=16)
-points(KM3,KMD3,col=4,pch=16)
 
+### Clusters in particular range of average masses (from formulas)
 
-RKM1 = KM1/round(EM1,0) - floor(KM1/round(EM1,0))
-RKM2 = KM2/round(EM2,0) - floor(KM2/round(EM2,0))
-RKM3 = KM3/round(EM3,0) - floor(KM3/round(EM3,0))
+massclust = function(forms,mmin,mmax){
+   AMs = CHNOSZ::mass(forms)
+   nm = which(AMs >= mmin & AMs <= mmax)
+   return(forms[nm])
+}
+cl = massclust(forms=formulas, mmin = 400, mmax = 2500)
+cl
 
-plot(sgm[,1],RKM,xlab="m/z",ylab="RKM")
-points(Au,RKM1,col=2,pch=16)
-points(As,RKM2,col=3,pch=16)
-points(AsAu,RKM3,col=4,pch=16)
 
 ```
 
-Identification (formula finding) of mass peaks using *rcdk* library,
+**2D mapping**
 
-alculation of average mass (library *CHNOSZ*), exact mass (library *InterpretMSSpectrum*), and monoisotopic mass
+Two dimensional mapping according to Artemenko et al. (2009) for list of clusters formulas
 
-Modeling mass spectra (library *enviPat*)
+```{r}
 
-2D mapping according to Artemenko et al. (2009)
+
+form = cl   # viz chunk nize
+
+### Removal of [, ], + and -
+ext_string = function(xx){
+    extracted_string <- gsub(".*\\[(.*)\\].*", "\\1", xx)
+    final_string <- gsub("\\+", "", extracted_string)
+    print(final_string)
+}
+FORM = sapply(form,ext_string)
+
+
+### Element matrix
+generate_element_matrix <- function(form){
+  library(CHNOSZ)
+  ulch <- sort(unique(unlist(lapply(form, function(x){names(CHNOSZ::count.elements(x))}))))
+  counting = function(x){
+    counts <- CHNOSZ::count.elements(x)
+    match_counts <- match(ulch, names(counts), nomatch = 0)
+    as.numeric(match_counts != 0) * unlist(counts)
+    }             
+  Mrl <- sapply(form,counting)
+  Mrl <- t(Mrl)
+  colnames(Mrl) <- ulch
+  return(Mrl)
+}
+result <- generate_element_matrix(FORM)
+result
+
+
+### Average mass
+AM = CHNOSZ::mass(FORM)
+
+
+### Exact mass
+EM = InterpretMSSpectrum::get_exactmass(FORM)
+
+
+### Monoisotopic mass
+MM = sapply(FORM,cluster_monoisotopic_mass) # see 2 chunks above
+
+
+### Nominal mass from monoisotopic mass
+MN = trunc(0.5 + MM*(1999.0/2000.0))
+#MN = round(MM,0)
+
+
+# Normalized monoisotopic mass defect (NMD)
+NMD = 1000*(MM-MN)/MM
+
+# Normalized isotopic shift (NIS)
+NIS = 1000*(AM-MM)/MM
+
+
+el = "Au" 
+
+nnc = length(unique(result[,el]))
+# col=(result[,el]+1)
+col <- colorRampPalette(brewer.pal(8, "Dark2"))(nnc)[result[,el]]
+plot(NMD, NIS, xlab="NMD", ylab="NIS",col=col,pch=16)
+legend("bottomright",legend=unique(result[,el]),col=unique(col),pch = 16,title=paste(el,"n"),cex=0.6)
+
+
+el = "As"
+
+result1 = result[order(result[,1]), ]
+nnc = length(unique(result1[,el]))
+# col=(result1[,el]+1)
+col <- colorRampPalette(brewer.pal(8, "Dark2"))(nnc)[result1[,el]]
+plot(NMD, NIS, xlab="NMD", ylab="NIS",col=col,pch=16)
+legend("bottomright",legend=unique(result1[,el]),col=unique(col),pch = 16,title=paste(el,"n"),cex=0.6)
+
+
+
+```
 
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
 
@@ -409,6 +447,24 @@ calculate_monoisotopic_mass <- function(formula) {
 MM <-sapply(FORMM, calculate_monoisotopic_mass)
 MM
 
+### Element matrix
+generate_element_matrix <- function(form){
+  library(CHNOSZ)
+  ulch <- sort(unique(unlist(lapply(form, function(x){names(CHNOSZ::count.elements(x))}))))
+  counting = function(x){
+    counts <- CHNOSZ::count.elements(x)
+    match_counts <- match(ulch, names(counts), nomatch = 0)
+    as.numeric(match_counts != 0) * unlist(counts)
+    }             
+  Mrl <- sapply(form,counting)
+  Mrl <- t(Mrl)
+  colnames(Mrl) <- ulch
+  return(Mrl)
+}
+result <- generate_element_matrix(FORMM)
+result
+
+
 ## Nominal mass
 #MN = round(EM,0)
 MN = trunc(0.5 + MM*(1999.0/2000.0))
@@ -422,65 +478,16 @@ NIS = 1000*(AM-MM)/MM
 
 plot(NMD, NIS, xlab="NMD", ylab="NIS")
 
-
-kmg = cbind(AM, EM, MM,NMD, NIS) 
-colnames(kmg) = c("AM","EM","MM","NMD","NIS")
-rownames(kmg) = FORMM
-kmg
-
-```
-
-Simulation 2D mapping
-
-```{r, echo=FALSE, warning=FALSE, message=FALSE}
-
-fAu = sapply(c(1:50), function(xx) paste0("Au",xx))
-fAs = sapply(c(1:50), function(xx) paste0("As",xx))
-fAsAu = sapply(c(1:50), function(xx) paste0("As",xx,"Au",xx))
-
-
-## Average mass
-AM1 = sapply(fAu, CHNOSZ::mass)
-AM2 = sapply(fAs, CHNOSZ::mass)
-AM3 = sapply(fAsAu, CHNOSZ::mass)
-
-
-## Exact mass
-EM1 = InterpretMSSpectrum::get_exactmass(fAu)
-EM3 = InterpretMSSpectrum::get_exactmass(fAs)
-EM3 = InterpretMSSpectrum::get_exactmass(fAsAu)
-
-## Monoisotopic mass
-calculate_monoisotopic_mass <- function(formula) {
-  counts <- parse_formula(formula)
-  mass <- sum(sapply(c(1:length(counts)), function(ii){unlist(monoisotopic_masses[names(counts)])[ii] %*% counts[ii]}))
-  return(mass)
-}
-MM1 <-sapply(fAu, calculate_monoisotopic_mass)
-MM2 <-sapply(fAs, calculate_monoisotopic_mass)
-MM3 <-sapply(fAsAu, calculate_monoisotopic_mass)
-
-## Nominal mass
-#MN = round(EM,0)
-MN1 = trunc(0.5 + MM1*(1999.0/2000.0))
-MN2 = trunc(0.5 + MM2*(1999.0/2000.0))
-MN3 = trunc(0.5 + MM3*(1999.0/2000.0))
-
-## Normalized monoisotopic mass defect (NMD)
-NMD1 = 1000*(MM1-MN1)/MM1
-NMD2 = 1000*(MM2-MN2)/MM2
-NMD3 = 1000*(MM3-MN3)/MM3
-
-## Normalized isotopic shift (NIS)
-NIS1 = 1000*(AM1-MM1)/MM1
-NIS2 = 1000*(AM2-MM2)/MM2
-NIS3 = 1000*(AM3-MM3)/MM3
-
-
 plot(NMD, NIS, xlab="NMD", ylab="NIS")
-points(NMD1,NIS1,col=2,pch=16)
-points(NMD2,NIS2,col=3,pch=16)
-points(NMD3,NIS3,col=4,pch=16)
+
+
+el = "Au" # "Ga"
+
+nnc = length(unique(result[,el]))
+# col=(result[,el]+1)
+col <- colorRampPalette(brewer.pal(8, "Dark2"))(nnc)[result[,el]]
+plot(NMD, NIS, xlab="NMD", ylab="NIS",col=col,pch=16)
+legend("bottomright",legend=unique(result[,el]),col=unique(col),pch = 16,title=paste(el,"n"),cex=0.6)
 
 ```
 
@@ -491,4 +498,3 @@ Artemenko, K. A., Zubarev, A. R., Samgina, T. Yu., Lebedev, A. T., Savitski, M. 
 Prokeš, L., Peña Méndez, E. M., Conde, J. E., Reddy Panyala, N., Alberti, M., Havel, J. 2014. Laser ablation synthesis of new gold arsenides using nano-gold and arsenic as precursors. Laser desorption ionisation time-of-flight mass spectrometry and spectrophotometry. *Rapid Communications in Mass Spectrometry*, 28 (6), 577-86. DOI: 10.1002/rcm.6815
 
 Zhurov, K. O., Kozhinov, A. N., Fornelli, L., Tsybin, Y. O. 2014. Distinguishing analyte from noise components in mass spectra of complex samples: Where to cut the noise? *Analytical Chemistry*, 86, 3308-3316. DOI: 10.1021/ac403278t
-
