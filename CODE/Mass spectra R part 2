@@ -196,6 +196,82 @@ names(C) = chemforms
 
 ```
 
+**Kendrick analysis**
+
+```{r}
+
+library(MALDIquant)
+
+peakDetectS = function(mz,int){
+  spect <- MALDIquant::createMassSpectrum(mass=mz, intensity=int)
+  vz <- MALDIquant::detectPeaks(spect,method="MAD",SNR=10)
+  # method=c("MAD", "SuperSmoother")
+  vzp = cbind(vz@mass,vz@intensity)
+  colnames(vzp) = c("mass","intensity")
+  return(vzp)
+}
+spectrumS <- peakDetectS(Xn,Yn)
+
+peakDetectR = function(mz,int){
+  spect <- MALDIquant::createMassSpectrum(mass=mz, intensity=int)
+  vz <- MALDIquant::detectPeaks(spect,method="MAD",SNR=100)
+  # method=c("MAD", "SuperSmoother")
+  vzp = cbind(vz@mass,vz@intensity)
+  colnames(vzp) = c("mass","intensity")
+  return(vzp)
+}
+spectrumR <- lapply(nprofiles, function(XX){peakDetectR(XX[,1],XX[,2])})
+names(spectrumR) <- names(nprofiles)
+
+
+cols = colorRampPalette(brewer.pal(8, "Dark2"))(length(nprofiles))
+# https://www.datanovia.com/en/blog/top-r-color-palettes-to-know-for-great-data-visualization/
+#cols = c(2,3,4,6,"orange",7,5,"steelblue", "gold", "firebrick", "forestgreen") 
+# more colors can be added according to  https://r-charts.com/colors/ or https://stackoverflow.com/questions/9563711/r-color-palettes-for-many-data-classes
+names(cols) = chemforms
+
+
+kendrick = function(spectrum,base){ 
+  #spectrum = spectrumS
+  #base = "Se"
+  mz = spectrum[,1]
+  # Exact mass
+  em = InterpretMSSpectrum::get_exactmass(base)
+  # Nominal mass from the exact mass
+  nm = round(em,0)
+  # Kendrick mass with classical base unit
+  KM = MetaboCoreUtils::calculateKm(mz, fragment = nm/em)
+  # KM = mz*(round(am,0)/am)
+  # Kendrick mass defect
+  KMD = MetaboCoreUtils::calculateKmd(mz, fragment = nm/em)
+  # Remainders of Kendrick mass (Fouquet et al. 2017)
+  RKMD = KM/round(em,0) - floor(KM/round(em,0))
+  return(cbind(mz,KM,KMD,RKMD))
+}
+
+ksamp <- kendrick(spectrumS,"Se")  # "Ga"
+
+kref <- lapply(spectrumR, function(XX){kendrick(XX,"Se")})  # "Ga"
+names(kref) <- names(spectrumR)
+
+
+plot(spectrumS[,1],ksamp[,"KMD"],xlab="m/z",ylab="KMD",col=1)
+
+plot(spectrumS[,1],ksamp[,"RKMD"],xlab="m/z",ylab="KMD",col=1)
+
+
+
+
+for(ii in c(1:length(chemforms))){ 
+ plot(kref[[ii]][,"mz"],kref[[ii]][,"KMD"], type="p", pch=16, xlim=c(xmin,xmax), col=cols[ii], xlab="m/z",ylab="KMD",main=chemforms[ii], sub=paste("Resolution:",resol,sep = " "))
+ points(ksamp[,"mz"],ksamp[,"KMD"],xlab="m/z",ylab="KMD",col=1,cex=1.5)
+#legend("topleft",chemforms[ii],lty=1,col=cols[ii],cex=.8)
+}
+
+
+
+```
+
 ### Patterns superposition
 
 The individual isotopic distributions of the theoretical signals are fitted to the measured data in estimated percentage contributions by superposition.
@@ -283,6 +359,127 @@ par(mfrow=c(1,1))
 
 
 RMSq_2 <- RMSq
+
+```
+
+Kendrick
+
+```{r}
+
+nprofiles
+cbind(Xn,Yn)
+
+
+### Peaks up to SNR
+
+speak1 <- MALDIquant::detectPeaks(spectrum,method="MAD",SNR=80)
+# method=c("MAD", "SuperSmoother")
+peaks1 = cbind(speak1@mass,speak1@intensity)
+length(speak1@mass) # number of peaks
+MALDIrppa::summaryPeaks(list(speak1), digits = 4)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+rug(peaks1[,1],col="gray")
+
+
+ims1 = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks1), gap=15)
+ims1 = as.numeric(ims1)
+nc1 = length(unique(ims1))
+
+clrange = function(ii){
+  xx = peaks1[,1][which(ims1==ii)]
+  return(range(xx))
+}
+rang = sapply(unique(ims1),clrange)
+rang = rang[ , colSums(is.na(rang))==0]
+rownames(rang) = c("lower","upper")
+nc1 = ncol(rang)
+colnames(rang) = c(1:nc1)
+rang
+
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc1)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+for(ii in c(1:nc1)){
+  rug(peaks1[,1][which(ims1==ii)], col=mycolors[ii])
+}
+
+
+clmax = function(ii){
+  xx = peaks1[,1][which(ims1==ii)]
+  yy = peaks1[,2][which(ims1==ii)]
+  return(xx[which.max(yy)])
+}
+maxg = sapply(unique(ims1),clmax)
+maxg = na.omit(unlist(maxg))
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(speak1, mass=as.numeric(maxg), underline=TRUE,avoidOverlap=TRUE,col=1)
+
+
+# Peaks with treshold 
+
+treshInt = 0.7
+speak2 <- MALDIrppa::rawToPeaks(RMSq[,1],as.matrix(RMSq[,2]))
+MALDIrppa::countPeaks(speak2) # number of peaks
+length(speak2[[1]]@mass) # number of peaks
+speak2 <- MALDIrppa::deletePeaks(speak2, min = treshInt)
+MALDIrppa::summaryPeaks(speak2, digits = 4)
+peaks2 = cbind(speak2[[1]]@mass,speak2[[1]]@intensity)
+nrow(peaks2)
+# summary(peaks2)
+
+ims2 = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks2), gap=10) 
+ims2 = as.numeric(ims2)
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+rug(peaks2[,1],col="gray")
+nc2 = length(unique(ims2))
+
+clrange = function(ii){
+  xx = peaks2[,1][which(ims2==ii)]
+  return(range(xx))
+}
+rang = sapply(unique(ims2),clrange)
+rang = rang[ , colSums(is.na(rang))==0]
+rownames(rang) = c("lower","upper")
+nc2 = ncol(rang)
+colnames(rang) = c(1:nc2)
+rang
+
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc2)
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+for(ii in c(1:nc2)){
+  rug(peaks2[,1][which(ims2==ii)], col=mycolors[ii])
+}
+
+
+clmax = function(ii){
+  xx = peaks2[,1][which(ims2==ii)]
+  yy = peaks2[,2][which(ims2==ii)]
+  return(xx[which.max(yy)])
+}
+maxg = sapply(unique(ims2),clmax)
+maxg = na.omit(unlist(maxg))
+
+plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
+MALDIquant::labelPeaks(speak2[[1]], mass=as.numeric(maxg), underline=TRUE,avoidOverlap=TRUE,col=1)
+
+
+# Treshold estimation according to Zhurov et al. 2014
+speak3 <- MALDIrppa::rawToPeaks(RMSq[,1],as.matrix(RMSq[,2]))
+
+plot(density(log10(speak3[[1]]@intensity),bw="nrd"),main="")
+# bw = "nrd0" (Silverman), "nrd" (Scott), "SJ" (Sheather, Jones), "ucv" (unbiased CV), "bcv" (biased CV)   # it can be chosen by a user  
+rug(log10(speak3[[1]]@intensity))
+tt = 0.5
+abline(v=tt,col=2,lty=2)
+
+plot(RMSq[,1],RMSq[,2],type="h", xlab="m/z", ylab="Intensity")
+abline(h=10^(tt),col=2,lty=2)
+
+
+
 
 ```
 
@@ -599,7 +796,7 @@ nrow(spm2)
 ## Reference pattern
 
 spectrumr <- createMassSpectrum(Xn,as.vector(ya))
-peaksr <- MALDIquant::detectPeaks(spectrumr,method="MAD",SNR=3) # SNR and halfWindowSize (for SuperSmoother method) can be modified by a user
+peaksr <- MALDIquant::detectPeaks(spectrumr,method="MAD",SNR=100) # SNR and halfWindowSize (for SuperSmoother method) can be modified by a user
 # method=c("MAD", "SuperSmoother")
 peaksr@mass = sapply(peaksr@mass,function(x) round(x,3)) 
 rpm = cbind(peaksr@mass,peaksr@intensity)
@@ -865,4 +1062,3 @@ Pečinka, L., Prokeš, L., Havel, J. 2019. Gallium selenide clusters generated v
 Stein, S. E., Scott, D. R. 1994. Optimization and testing of mass spectral library search algorithms for compound identification. *Journal of the American Society for Mass Spectrometry*, 5 (9), 859-866. DOI: 10.1016/1044-0305(94)87009-8
 
 Zhurov, K. O., Kozhinov, A. N., Fornelli, L., Tsybin, Y. O. 2014. Distinguishing analyte from noise components in mass spectra of complex samples: Where to cut the noise? *Analytical Chemistry*, 86, 3308-3316. DOI: 10.1021/ac403278t
-
