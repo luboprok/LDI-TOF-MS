@@ -181,35 +181,35 @@ plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
 rug(peaks1[,1],col="gray")
 
 
-ims = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks1), gap=15)
-ims = as.numeric(ims)
-nc = length(unique(ims))
+ims1 = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks1), gap=15)
+ims1 = as.numeric(ims1)
+nc1 = length(unique(ims1))
 
 clrange = function(ii){
-  xx = peaks1[,1][which(ims==ii)]
+  xx = peaks1[,1][which(ims1==ii)]
   return(range(xx))
 }
-rang = sapply(unique(ims),clrange)
+rang = sapply(unique(ims1),clrange)
 rang = rang[ , colSums(is.na(rang))==0]
 rownames(rang) = c("lower","upper")
-nc = ncol(rang)
-colnames(rang) = c(1:nc)
+nc1 = ncol(rang)
+colnames(rang) = c(1:nc1)
 rang
 
-mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc)
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc1)
 
 plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
-for(ii in c(1:nc)){
-  rug(peaks1[,1][which(ims==ii)], col=mycolors[ii])
+for(ii in c(1:nc1)){
+  rug(peaks1[,1][which(ims1==ii)], col=mycolors[ii])
 }
 
 
 clmax = function(ii){
-  xx = peaks1[,1][which(ims==ii)]
-  yy = peaks1[,2][which(ims==ii)]
+  xx = peaks1[,1][which(ims1==ii)]
+  yy = peaks1[,2][which(ims1==ii)]
   return(xx[which.max(yy)])
 }
-maxg = sapply(unique(ims),clmax)
+maxg = sapply(unique(ims1),clmax)
 maxg = na.omit(unlist(maxg))
 
 plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
@@ -226,38 +226,39 @@ speak2 <- MALDIrppa::deletePeaks(speak2, min = treshInt)
 MALDIrppa::summaryPeaks(speak2, digits = 4)
 peaks2 = cbind(speak2[[1]]@mass,speak2[[1]]@intensity)
 nrow(peaks2)
+# summary(peaks2)
 
-ims = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks2), gap=10) 
-ims = as.numeric(ims)
+ims2 = InterpretMSSpectrum::GetGroupFactor(as.matrix(peaks2), gap=10) 
+ims2 = as.numeric(ims2)
 plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
 rug(peaks2[,1],col="gray")
-nc = length(unique(ims))
+nc2 = length(unique(ims2))
 
 clrange = function(ii){
-  xx = peaks2[,1][which(ims==ii)]
+  xx = peaks2[,1][which(ims2==ii)]
   return(range(xx))
 }
-rang = sapply(unique(ims),clrange)
+rang = sapply(unique(ims2),clrange)
 rang = rang[ , colSums(is.na(rang))==0]
 rownames(rang) = c("lower","upper")
-nc = ncol(rang)
-colnames(rang) = c(1:nc)
+nc2 = ncol(rang)
+colnames(rang) = c(1:nc2)
 rang
 
-mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc)
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nc2)
 
 plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
-for(ii in c(1:nc)){
-  rug(peaks2[,1][which(ims==ii)], col=mycolors[ii])
+for(ii in c(1:nc2)){
+  rug(peaks2[,1][which(ims2==ii)], col=mycolors[ii])
 }
 
 
 clmax = function(ii){
-  xx = peaks2[,1][which(ims==ii)]
-  yy = peaks2[,2][which(ims==ii)]
+  xx = peaks2[,1][which(ims2==ii)]
+  yy = peaks2[,2][which(ims2==ii)]
   return(xx[which.max(yy)])
 }
-maxg = sapply(unique(ims),clmax)
+maxg = sapply(unique(ims2),clmax)
 maxg = na.omit(unlist(maxg))
 
 plot(RMSq[,1],RMSq[,2],type="l",xlab="m/z",ylab="Intensity")
@@ -564,14 +565,28 @@ Calculation of Kendrick mass, Kendrick mass defect and remainders of Kendrick ma
 
 library(InterpretMSSpectrum)
 
+el = "Se"  # "Ga"
+
 # Exact mass
-em = InterpretMSSpectrum::get_exactmass("Se")
+em = InterpretMSSpectrum::get_exactmass(el)
 
 # Nominal mass from the exact mass
 nm = round(em,0)
 
 
-mz = speak1@mass   # speak2[[1]]@mass
+
+mz = peaks1[,1] # peaks2[,1] 
+ims = ims1 # ims2
+nnc = length(unique(ims))  # nrow(peaks2)
+# nnc = nrow(peaks1)  # nrow(peaks2)
+# col=ims
+# unique(ims)
+col = colorRampPalette(brewer.pal(8, "Dark2"))(nnc)[ims]
+# unique(col)
+mm = as.data.frame(cbind(unique(ims),unique(col)))
+mm[,1] = as.numeric(mm[,1])
+mm = mm[order(mm[,1]),]
+mm
 
 
 ### Kendrick mass with classical base unit
@@ -593,12 +608,12 @@ KMD = MetaboCoreUtils::calculateKmd(mz, fragment = nm/em)
 RKMD = KM/round(em,0) - floor(KM/round(em,0))
 
 
+plot(KM,KMD,xlab="KM",ylab="KMD",col=col)
+#legend("bottomright",legend=unique(ims),col=col,pch = 1,title=paste(el,"n"))
 
-plot(KM,KMD,xlab="KM",ylab="KMD")
+plot(mz,KMD,xlab="m/z",ylab="KMD",col=col)
 
-plot(mz,KMD,xlab="m/z",ylab="KMD")
-
-plot(mz,RKMD,xlab="m/z",ylab="RKMD")
+plot(mz,RKMD,xlab="m/z",ylab="RKMD",col=col)
 
 
 kmm = cbind(mz,KM,KMD,RKMD)
@@ -639,8 +654,8 @@ massclust = function(forms,mmin,mmax){
    nm = which(AMs >= mmin & AMs <= mmax)
    return(forms[nm])
 }
-massclust(forms=formulas, mmin = 400, mmax = 550)
-
+cl = massclust(forms=formulas, mmin = 400, mmax = 1550)
+cl
 
 ```
 
@@ -650,14 +665,12 @@ Two dimensional mapping according to Artemenko et al. (2009) for list of cluster
 
 ```{r}
 
-form = cl   # viz chunk nize
-
-
-### Removal of [, ], + and -
-
 library(CHNOSZ)
 library(InterpretMSSpectrum)
 
+form = cl   # viz chunk nize
+
+### Removal of [, ], + and -
 ext_string = function(xx){
     extracted_string <- gsub(".*\\[(.*)\\].*", "\\1", xx)
     final_string <- gsub("\\+", "", extracted_string)
@@ -665,6 +678,23 @@ ext_string = function(xx){
 }
 FORM = sapply(form,ext_string)
 
+
+### Element matrix
+generate_element_matrix <- function(form){
+  library(CHNOSZ)
+  ulch <- sort(unique(unlist(lapply(form, function(x){names(CHNOSZ::count.elements(x))}))))
+  counting = function(x){
+    counts <- CHNOSZ::count.elements(x)
+    match_counts <- match(ulch, names(counts), nomatch = 0)
+    as.numeric(match_counts != 0) * unlist(counts)
+    }             
+  Mrl <- sapply(form,counting)
+  Mrl <- t(Mrl)
+  colnames(Mrl) <- ulch
+  return(Mrl)
+}
+result <- generate_element_matrix(FORM)
+result
 
 
 ### Average mass
@@ -691,46 +721,24 @@ NMD = 1000*(MM-MN)/MM
 NIS = 1000*(AM-MM)/MM
 
 
-plot(NMD, NIS, xlab="NMD", ylab="NIS")
+
+el = "Se" 
+
+nnc = length(unique(result[,el]))
+# col=(result[,el]+1)
+col <- colorRampPalette(brewer.pal(8, "Dark2"))(nnc)[result[,el]]
+plot(NMD, NIS, xlab="NMD", ylab="NIS",col=col,pch=16)
+legend("bottomright",legend=unique(result[,el]),col=unique(col),pch = 16,title=paste(el,"n"),cex=0.6)
 
 
-```
+el = "Ga"
 
-2D mapping - simulation
-
-```{r}
-
-library(CHNOSZ)
-
-formulas = gformulas(El1 = "Ga", nmax1 = 12, El2 = "Se", nmax2 = 20)
-formulas
-
-
-### Average mass
-AM = CHNOSZ::mass(formulas)
-
-
-### Exact mass
-EM = InterpretMSSpectrum::get_exactmass(formulas)
-
-
-### Monoisotopic mass
-MM = sapply(formulas,cluster_monoisotopic_mass) # see 2 chunks above
-
-
-### Nominal mass from monoisotopic mass
-MN = trunc(0.5 + MM*(1999.0/2000.0))
-#MN = round(MM,0)
-
-
-# Normalized monoisotopic mass defect (NMD)
-NMD = 1000*(MM-MN)/MM
-
-# Normalized isotopic shift (NIS)
-NIS = 1000*(AM-MM)/MM
-
-
-plot(NMD, NIS, xlab="NMD", ylab="NIS")
+result1 = result[order(result[,1]), ]
+nnc = length(unique(result1[,el]))
+# col=(result1[,el]+1)
+col <- colorRampPalette(brewer.pal(8, "Dark2"))(nnc)[result1[,el]]
+plot(NMD, NIS, xlab="NMD", ylab="NIS",col=col,pch=16)
+legend("bottomright",legend=unique(result1[,el]),col=unique(col),pch = 16,title=paste(el,"n"),cex=0.6)
 
 
 ```
